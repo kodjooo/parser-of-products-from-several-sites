@@ -97,3 +97,16 @@ docker run --rm \
      python -m app.main run
    ```
 5. Для регулярных запусков создайте systemd unit или cron-задачу, использующую эту команду (опционально добавьте `--dry-run`, `--no-resume` при необходимости).
+
+## Docker Compose
+Для упрощения запуска используйте `docker-compose.yml`, который уже описывает сервис `parser`:
+
+```bash
+# старт с пересборкой
+docker compose up --build parser
+
+# или только запуск (если образ уже собран)
+docker compose up parser
+```
+
+Команда автоматически подхватит `.env` из корня и смонтирует нужные volume (`config/sites`, `state`, `assets/images`, `secrets`). Каталоги должны существовать заранее.

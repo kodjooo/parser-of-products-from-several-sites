@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  parser:
+    build: .
+    image: products-agent
+    env_file:
+      - .env
+    volumes:
+      - ./config/sites:/app/config/sites
+      - ./state:/var/app/state
+      - ./assets/images:/app/assets/images
+      - ./secrets:/secrets
+    command: ["python", "-m", "app.main", "run"]
