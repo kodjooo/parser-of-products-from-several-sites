@@ -99,6 +99,7 @@ class SelectorConfig(BaseModel):
     product_link_selector: str
     base_url: HttpUrl | None = None
     allowed_domains: list[str] = Field(default_factory=list)
+    main_image_selector: str | None = None
 
 
 class SiteLimits(BaseModel):

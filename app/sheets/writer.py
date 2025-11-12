@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from app.config.models import SiteConfig
 from app.crawler.models import ProductRecord, SiteCrawlResult
 from app.logger import get_logger
 from app.runtime import RuntimeContext
@@ -31,6 +32,9 @@ class SheetsWriter:
         )
         self.state_tab = context.config.sheet.sheet_state_tab
         self.runs_tab = context.config.sheet.sheet_runs_tab
+        self.client.ensure_aux_tabs(self.state_tab, self.runs_tab)
+        self._prepared_tabs: set[str] = set()
+        self._existing_cache: dict[str, set[str]] = {}
 
     def _env_path(self, key: str) -> Path:
         value = os.getenv(key)
@@ -44,30 +48,40 @@ class SheetsWriter:
             raise RuntimeError(f"Не задана переменная окружения {key}")
         return [scope.strip() for scope in value.split(",") if scope.strip()]
 
-    def write(self, results: list[SiteCrawlResult]) -> None:
-        if not results:
-            logger.warning("Нет данных для записи в Google Sheets")
+    def prepare_site(self, site: SiteConfig) -> None:
+        tab_name = site.domain
+        if tab_name in self._prepared_tabs:
             return
-        self.client.ensure_tabs([result.sheet_tab for result in results])
-        self.client.ensure_aux_tabs(self.state_tab, self.runs_tab)
-        for result in results:
-            self._write_site(result)
-        self._write_runs(results)
-        self._sync_state_sheet()
+        self.client.ensure_tabs([tab_name])
+        self._existing_cache[tab_name] = self.client.get_existing_product_urls(tab_name)
+        self._prepared_tabs.add(tab_name)
 
-    def _write_site(self, result: SiteCrawlResult) -> None:
-        existing = self.client.get_existing_product_urls(result.sheet_tab)
+    def append_site_records(self, site: SiteConfig, records: list[ProductRecord]) -> None:
+        if not records:
+            return
+        tab_name = site.domain
+        self.prepare_site(site)
+        existing = self._existing_cache.get(tab_name, set())
         rows: list[list[str]] = []
-        for record in result.records:
+        for record in records:
             if record.product_url in existing:
                 continue
             existing.add(record.product_url)
             rows.append(self._record_to_row(record))
+        if not rows:
+            return
         logger.info(
             "Подготовлено строк для записи",
-            extra={"sheet": result.sheet_tab, "rows": len(rows)},
+            extra={"sheet": tab_name, "rows": len(rows)},
         )
-        self.client.append_rows(result.sheet_tab, rows)
+        self.client.append_rows(tab_name, rows)
+
+    def finalize(self, results: list[SiteCrawlResult]) -> None:
+        if not results:
+            logger.warning("Нет данных для записи в Google Sheets")
+            return
+        self._write_runs(results)
+        self._sync_state_sheet()
 
     def _record_to_row(self, record: ProductRecord) -> list[str]:
         metadata_pairs = dict(record.metadata) if record.metadata else {}

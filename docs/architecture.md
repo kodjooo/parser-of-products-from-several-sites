@@ -104,21 +104,21 @@ category_urls:
 - Конфиги монтируются в `/app/config`, состояние и credentials — в `/var/app/state` и `/secrets`.
 
 ## 6. Файл `.env`
-Используется для передачи путей к конфигурациям, state и OAuth-файлам. Все переменные снабжены комментариями с описанием источников доступа.
+Используется для передачи путей к конфигурациям, state и OAuth-файлам. Все переменные снабжены комментариями с описанием источников доступа. Переменная `WRITE_FLUSH_PAGE_INTERVAL` определяет, как часто (в страницах) агент будет отправлять накопленные данные в Google Sheets, чтобы итоговые записи появлялись даже при прерывании запуска.
 
 ## 7. Следующие этапы
 По завершении каждого этапа (config/state/crawler/sheets/надёжность) этот документ будет дополняться деталями реализации и диаграммами потоков.
 
 ## 8. Этап 3 — модуль обхода
 - `app.crawler.engines` реализует `HttpEngine` (httpx + ретраи) и `BrowserEngine` (Playwright sync API, скролл для infinite_scroll). Общий интерфейс `EngineRequest`.
-- `app.crawler.site_crawler.SiteCrawler` поддерживает все три режима пагинации, wait/stop-conditions, счётчики, дедуп, обновление `StateStore`.
+- `app.crawler.site_crawler.SiteCrawler` поддерживает все три режима пагинации, wait/stop-conditions, счётчики, дедуп, обновление `StateStore`, а также умеет отдавать данные порциями каждые `WRITE_FLUSH_PAGE_INTERVAL` страниц.
 - `app.crawler.service.CrawlService` поочерёдно запускает `SiteCrawler` для каждого сайта и возвращает список `SiteCrawlResult`.
-- `app.crawler.content_fetcher.ProductContentFetcher` скачивает карточку товара, извлекает текст без тегов и сохраняет основное изображение (транслитом названия).
+- `app.crawler.content_fetcher.ProductContentFetcher` скачивает карточку товара, извлекает текст без тегов и сохраняет основное изображение (транслитом названия); при наличии `selectors.main_image_selector` берёт картинку по заданному CSS-селектору.
 - Нормализация ссылок и md5-хэш находятся в `app.crawler.utils.normalize_url`.
 
 ## 9. Этап 4 — запись в Google Sheets
 - `app.sheets.client.GoogleSheetsClient` инкапсулирует OAuth2 (InstalledAppFlow), проверку/создание вкладок, batchUpdate и повторные попытки с экспоненциальным бэкоффом.
-- `app.sheets.writer.SheetsWriter` превращает `ProductRecord` в строки (колонки A–L), добавляя очищенный контент и путь к изображению рядом с URL товара.
+- `app.sheets.writer.SheetsWriter` превращает `ProductRecord` в строки (колонки A–L), добавляя очищенный контент и путь к изображению рядом с URL товара, и умеет дозаписывать данные порциями по мере обхода (кэшируя уже существующие URL, чтобы избежать дубликатов).
 - Вкладки `_runs` и `_state` создаются автоматически; `_runs` получает итоги (run_id, site, started/finished, totals), `_state` отражает содержимое SQLite-хранилища для возобновляемости.
 - `AgentRunner` вызывает SheetsWriter после краулера (если не указан dry-run), сохраняя список последних результатов внутри раннера.
 

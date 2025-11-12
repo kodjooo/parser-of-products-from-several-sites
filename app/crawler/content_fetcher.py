@@ -37,7 +37,7 @@ class ProductContentFetcher:
             follow_redirects=True,
         )
 
-    def fetch(self, product_url: str) -> ProductContent:
+    def fetch(self, product_url: str, image_selector: str | None = None) -> ProductContent:
         try:
             response = self.client.get(
                 product_url,
@@ -54,7 +54,15 @@ class ProductContentFetcher:
         html = response.text
         soup = BeautifulSoup(html, "lxml")
         text_content = _extract_text_content(soup)
-        image_url = _extract_main_image_url(soup, product_url)
+        image_url = None
+        if image_selector:
+            node = soup.select_one(image_selector)
+            if node:
+                src = node.get("src") or node.get("data-src")
+                if src:
+                    image_url = urljoin(product_url, src)
+        if not image_url:
+            image_url = _extract_main_image_url(soup, product_url)
         title = _extract_title(soup)
 
         image_path = None

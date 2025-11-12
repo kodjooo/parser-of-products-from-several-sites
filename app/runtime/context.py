@@ -21,6 +21,7 @@ class RuntimeContext:
     dry_run: bool = False
     resume: bool = True
     assets_dir: Path | None = None
+    flush_page_interval: int = 5
 
     @property
     def spreadsheet_id(self) -> str:

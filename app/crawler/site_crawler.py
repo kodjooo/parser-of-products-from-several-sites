@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
@@ -29,7 +29,13 @@ class CategoryResult:
 class SiteCrawler:
     """Обходит все категории сайта и готовит результаты для записи."""
 
-    def __init__(self, context: RuntimeContext, site: SiteConfig):
+    def __init__(
+        self,
+        context: RuntimeContext,
+        site: SiteConfig,
+        flush_pages: int = 0,
+        flush_callback: Optional[Callable[[list[ProductRecord]], None]] = None,
+    ):
         self.context = context
         self.site = site
         self.engine = create_engine(site.engine, context.config.network)
@@ -37,6 +43,10 @@ class SiteCrawler:
         self.content_fetcher = ProductContentFetcher(context.config.network, assets_dir)
         self.dedupe_strip = context.config.dedupe.strip_params_blacklist
         self._seen_urls: set[str] = set()
+        self.flush_pages = max(1, flush_pages) if flush_pages else 0
+        self.flush_callback = flush_callback
+        self._pending_chunk: list[ProductRecord] = []
+        self._pages_since_flush = 0
 
     def crawl(self) -> SiteCrawlResult:
         logger.info("Старт обхода сайта", extra={"site": self.site.name})
@@ -50,6 +60,7 @@ class SiteCrawler:
         finally:
             self.engine.shutdown()
             self.content_fetcher.close()
+            self._emit_pending(force=True)
         return SiteCrawlResult(
             site_name=self.site.name,
             sheet_tab=self.site.domain,
@@ -84,6 +95,8 @@ class SiteCrawler:
                 html, category_url, page, metrics
             )
             records.extend(page_records)
+            self._queue_for_flush(page_records)
+            self._mark_page_processed()
             if not has_data:
                 break
             metrics.last_page = page
@@ -105,6 +118,8 @@ class SiteCrawler:
                 html, category_url, page, metrics
             )
             records.extend(page_records)
+            self._queue_for_flush(page_records)
+            self._mark_page_processed()
             metrics.last_page = page
             self._persist_state(category_url, last_page=page, total=len(records))
             if not has_data or limit_hit or self._should_stop(metrics):
@@ -118,6 +133,8 @@ class SiteCrawler:
         html = self._fetch_page_html(category_url, scroll_limit=self.site.limits.max_scrolls)
         metrics = CategoryMetrics(site_name=self.site.name, category_url=category_url)
         records, has_data, _ = self._process_html(html, category_url, 1, metrics)
+        self._queue_for_flush(records)
+        self._emit_pending(force=True)
         if has_data:
             metrics.last_page = 1
             self._persist_state(category_url, last_page=1, total=len(records))
@@ -182,7 +199,9 @@ class SiteCrawler:
                 run_id=self.context.run_id,
                 product_id_hash=product_hash,
             )
-            content = self.content_fetcher.fetch(normalized)
+            content = self.content_fetcher.fetch(
+                normalized, image_selector=self.site.selectors.main_image_selector
+            )
             record.content_text = content.text_content
             record.image_url = content.image_url
             record.image_path = content.image_path
@@ -249,3 +268,28 @@ class SiteCrawler:
             if condition.type == "no_new_products" and metrics.total_written == 0:
                 return True
         return False
+
+    def _queue_for_flush(self, new_records: list[ProductRecord]) -> None:
+        if not self.flush_callback or not new_records:
+            return
+        self._pending_chunk.extend(new_records)
+
+    def _mark_page_processed(self) -> None:
+        if not self.flush_callback or self.flush_pages <= 0:
+            return
+        self._pages_since_flush += 1
+        if self._pages_since_flush >= self.flush_pages:
+            self._emit_pending()
+
+    def _emit_pending(self, force: bool = False) -> None:
+        if not self.flush_callback:
+            return
+        if not self._pending_chunk:
+            if force:
+                self._pages_since_flush = 0
+            return
+        if force or (self.flush_pages > 0 and self._pages_since_flush >= self.flush_pages):
+            chunk = self._pending_chunk
+            self._pending_chunk = []
+            self._pages_since_flush = 0
+            self.flush_callback(chunk)

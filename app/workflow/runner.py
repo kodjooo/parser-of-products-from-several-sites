@@ -63,6 +63,9 @@ class AgentRunner:
 
         assets_dir = Path(os.getenv("PRODUCT_IMAGE_DIR", "/app/assets/images"))
         assets_dir.mkdir(parents=True, exist_ok=True)
+        flush_pages = int(os.getenv("WRITE_FLUSH_PAGE_INTERVAL", "5") or "5")
+        if flush_pages < 1:
+            flush_pages = 5
 
         context = RuntimeContext(
             run_id=run_id,
@@ -73,6 +76,7 @@ class AgentRunner:
             dry_run=options.dry_run,
             resume=options.resume,
             assets_dir=assets_dir,
+            flush_page_interval=flush_pages,
         )
         try:
             self._execute(context)
@@ -85,16 +89,16 @@ class AgentRunner:
             f"сайтов={len(context.sites)}, resume={context.resume}, "
             f"dry_run={context.dry_run}"
         )
-        crawler = CrawlService(context)
+        writer = SheetsWriter(context) if not context.dry_run else None
+        crawler = CrawlService(context, writer=writer)
         self.latest_results = crawler.collect()
         total_records = sum(len(result.records) for result in self.latest_results)
         console.print(
             f"[green]Обход завершён[/green]: сайтов={len(self.latest_results)}, "
             f"ссылок={total_records}"
         )
-        if context.dry_run:
+        if writer is None:
             console.print("[cyan]Dry-run: запись в Google Sheets пропущена[/cyan]")
             return
-        writer = SheetsWriter(context)
-        writer.write(self.latest_results)
+        writer.finalize(self.latest_results)
         console.print("[green]Данные записаны в Google Sheets[/green]")

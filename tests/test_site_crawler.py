@@ -8,6 +8,7 @@ import pytest
 
 from app.config.models import GlobalConfig, SiteConfig
 from app.crawler.content_fetcher import ProductContent
+from app.crawler.models import ProductRecord
 from app.crawler.site_crawler import SiteCrawler
 from app.runtime import RuntimeContext
 from app.state.storage import StateStore
@@ -28,7 +29,7 @@ class DummyContentFetcher:
     def __init__(self, *args, **kwargs) -> None:
         pass
 
-    def fetch(self, url: str) -> ProductContent:
+    def fetch(self, url: str, image_selector: str | None = None) -> ProductContent:
         return ProductContent(
             text_content=f"content-{url}",
             image_url="https://demo.example/img.jpg",
@@ -97,6 +98,7 @@ def test_site_crawler_numbered_pages(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         dry_run=True,
         resume=True,
         assets_dir=tmp_path / "assets",
+        flush_page_interval=1,
     )
     html_page1 = """
     <div class="product"><a href="https://demo.example/p/1">1</a></div>
@@ -114,11 +116,17 @@ def test_site_crawler_numbered_pages(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: fake_engine)
     monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: DummyContentFetcher())
 
-    crawler = SiteCrawler(context, site)
+    flushed: list[list[str]] = []
+
+    def flush_chunk(chunk: list[ProductRecord]) -> None:
+        flushed.append([item.product_url for item in chunk])
+
+    crawler = SiteCrawler(context, site, flush_pages=1, flush_callback=flush_chunk)
     result = crawler.crawl()
 
     assert len(result.records) == 3
     assert store.get(site.name, str(site.category_urls[0])).last_page == 2
     assert result.records[0].content_text.startswith("content-")
     assert result.records[0].image_path == "/tmp/img.jpg"
+    assert flushed and flushed[0][0] == "https://demo.example/p/1"
     store.close()

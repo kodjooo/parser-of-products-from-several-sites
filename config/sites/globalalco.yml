@@ -13,6 +13,8 @@ selectors:
   product_link_selector: "div.goods div.panel-body a.img"
   # Ограничение доменов, которые разрешено сохранять (оставьте пустым, если не нужно фильтровать)
   allowed_domains: ["globalalco.ru"]
+  # Селектор основного изображения на странице товара
+  main_image_selector: "a.thumbnail.main-photo.main-photo-mobile img"
 
 pagination:
   # Тип пагинации:

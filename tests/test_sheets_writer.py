@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.config.models import GlobalConfig
+import os
+
+from app.config.models import GlobalConfig, SiteConfig
 from app.crawler.models import CategoryMetrics, ProductRecord, SiteCrawlResult
 from app.runtime import RuntimeContext
 from app.sheets.writer import SheetsWriter
@@ -108,8 +110,22 @@ def test_sheets_writer_deduplicates_and_exports_state(tmp_path: Path) -> None:
     )
 
     fake_client = FakeSheetsClient()
+    os.environ["GOOGLE_OAUTH_CLIENT_SECRET_PATH"] = str(tmp_path / "secret.json")
+    os.environ["GOOGLE_OAUTH_TOKEN_PATH"] = str(tmp_path / "token.json")
+    os.environ["GOOGLE_OAUTH_SCOPES"] = "https://www.googleapis.com/auth/spreadsheets"
     writer = SheetsWriter(context, client=fake_client)  # type: ignore[arg-type]
-    writer.write([result])
+    site = SiteConfig.model_validate(
+        {
+            "site": {"name": "demo", "domain": "demo.example"},
+            "selectors": {"product_link_selector": ".card a"},
+            "pagination": {"mode": "numbered_pages"},
+            "limits": {},
+            "category_urls": ["https://demo.example/catalog/"],
+        }
+    )
+    writer.prepare_site(site)
+    writer.append_site_records(site, [record_new, record_dup])
+    writer.finalize([result])
 
     appended_row = fake_client.appended["demo.example"][0]
     assert appended_row[2] == "https://demo/p/2"
