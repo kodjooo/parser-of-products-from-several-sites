@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -7,6 +8,7 @@ from collections.abc import Callable
 
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -32,6 +34,7 @@ class GoogleSheetsClient:
         self.token_path = token_path
         self.scopes = list(scopes)
         self.batch_size = batch_size
+        self._client_config_type = self._detect_client_type()
         self.service = build("sheets", "v4", credentials=self._authorize())
 
     def _retry_call(self, func: Callable[[], dict]) -> dict:
@@ -45,7 +48,24 @@ class GoogleSheetsClient:
 
         return _inner()
 
+    def _detect_client_type(self) -> str:
+        try:
+            data = json.loads(self.client_secret_path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"Не найден файл OAuth/Service Account: {self.client_secret_path}") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Некорректный JSON в {self.client_secret_path}") from exc
+        if data.get("type") == "service_account":
+            return "service_account"
+        if "installed" in data or data.get("type") == "installed" or "web" in data:
+            return "installed"
+        raise RuntimeError("Client secrets must describe installed app or service account")
+
     def _authorize(self) -> Credentials:
+        if self._client_config_type == "service_account":
+            return service_account.Credentials.from_service_account_file(
+                str(self.client_secret_path), scopes=self.scopes
+            )
         creds = None
         if self.token_path.exists():
             creds = Credentials.from_authorized_user_file(

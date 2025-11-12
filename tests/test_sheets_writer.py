@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import json
 import os
 
 from app.config.models import GlobalConfig, SiteConfig
@@ -110,7 +111,17 @@ def test_sheets_writer_deduplicates_and_exports_state(tmp_path: Path) -> None:
     )
 
     fake_client = FakeSheetsClient()
-    os.environ["GOOGLE_OAUTH_CLIENT_SECRET_PATH"] = str(tmp_path / "secret.json")
+    service_json = {
+        "type": "service_account",
+        "project_id": "demo",
+        "private_key_id": "dummy",
+        "private_key": "-----BEGIN PRIVATE KEY-----\nABCDEF\n-----END PRIVATE KEY-----\n",
+        "client_email": "demo@demo",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    secret_path = tmp_path / "secret.json"
+    secret_path.write_text(json.dumps(service_json), encoding="utf-8")
+    os.environ["GOOGLE_OAUTH_CLIENT_SECRET_PATH"] = str(secret_path)
     os.environ["GOOGLE_OAUTH_TOKEN_PATH"] = str(tmp_path / "token.json")
     os.environ["GOOGLE_OAUTH_SCOPES"] = "https://www.googleapis.com/auth/spreadsheets"
     writer = SheetsWriter(context, client=fake_client)  # type: ignore[arg-type]
