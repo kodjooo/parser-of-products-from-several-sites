@@ -79,6 +79,21 @@ docker run --rm \
 
 ## Деплой на удалённый сервер
 1. Скопируйте исходники и секреты (`scp -r . user@host:/opt/agent`).
-2. Соберите образ на сервере: `docker build -t products-agent /opt/agent`.
-3. Создайте директории `/opt/agent/config/sites`, `/opt/agent/state`, `/opt/agent/secrets` и заполните конфиги/креды.
-4. Запустите контейнер через systemd/cron или вручную (пример команды выше). Для постоянной работы создайте unit-файл, который монтирует volume с конфигами сайтов и state.
+2. На сервере установите Docker и выполните:
+   ```bash
+   cd /opt/agent
+   docker build -t products-agent .
+   ```
+3. Создайте директории `/opt/agent/config/sites`, `/opt/agent/state`, `/opt/agent/assets/images`, `/opt/agent/secrets` и положите туда конфиги/volume (копируйте из репозитория/CI).
+4. Запускайте контейнер командой:
+   ```bash
+   docker run --rm \
+     --env-file /opt/agent/.env \
+     -v /opt/agent/config/sites:/app/config/sites \
+     -v /opt/agent/state:/var/app/state \
+     -v /opt/agent/assets/images:/app/assets/images \
+     -v /opt/agent/secrets:/secrets \
+     products-agent \
+     python -m app.main run
+   ```
+5. Для регулярных запусков создайте systemd unit или cron-задачу, использующую эту команду (опционально добавьте `--dry-run`, `--no-resume` при необходимости).
