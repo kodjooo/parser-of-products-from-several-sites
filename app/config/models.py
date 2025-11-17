@@ -100,6 +100,17 @@ class SelectorConfig(BaseModel):
     base_url: HttpUrl | None = None
     allowed_domains: list[str] = Field(default_factory=list)
     main_image_selector: str | None = None
+    content_drop_after: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Селекторы элементов, после которых (включая их) текст товара нужно обрезать"
+        ),
+    )
+    name_en_selector: str | None = None
+    name_ru_selector: str | None = None
+    price_without_discount_selector: str | None = None
+    price_with_discount_selector: str | None = None
+    category_labels: dict[str, str] = Field(default_factory=dict)
 
 
 class SiteLimits(BaseModel):

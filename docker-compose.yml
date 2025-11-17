@@ -9,4 +9,4 @@ services:
       - ./state:/var/app/state
       - ./assets/images:/app/assets/images
       - ./secrets:/secrets
-    command: ["python", "-m", "app.main", "run"]
+    command: ["python", "-m", "app.main"]

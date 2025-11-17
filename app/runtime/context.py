@@ -21,7 +21,8 @@ class RuntimeContext:
     dry_run: bool = False
     resume: bool = True
     assets_dir: Path | None = None
-    flush_page_interval: int = 5
+    flush_product_interval: int = 5
+    products_written: int = 0
 
     @property
     def spreadsheet_id(self) -> str:
@@ -29,3 +30,12 @@ class RuntimeContext:
 
     def iter_sites(self) -> Iterable[SiteConfig]:
         return iter(self.sites)
+
+    def register_product(self) -> bool:
+        self.products_written += 1
+        limit = self.config.runtime.global_stop.stop_after_products
+        return bool(limit and self.products_written >= limit)
+
+    def product_limit_reached(self) -> bool:
+        limit = self.config.runtime.global_stop.stop_after_products
+        return bool(limit and self.products_written >= limit)

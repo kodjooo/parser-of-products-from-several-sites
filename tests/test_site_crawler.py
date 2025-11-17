@@ -29,11 +29,22 @@ class DummyContentFetcher:
     def __init__(self, *args, **kwargs) -> None:
         pass
 
-    def fetch(self, url: str, image_selector: str | None = None) -> ProductContent:
+    def fetch(
+        self,
+        url: str,
+        image_selector: str | None = None,
+        drop_after_selectors: list[str] | None = None,
+        **kwargs,
+    ) -> ProductContent:
         return ProductContent(
             text_content=f"content-{url}",
             image_url="https://demo.example/img.jpg",
-            image_path="/tmp/img.jpg",
+            image_path=None,
+            title="Dummy",
+            name_en="Test EN",
+            name_ru="Тест",
+            price_without_discount="100",
+            price_with_discount="90",
         )
 
     def close(self) -> None:
@@ -98,7 +109,7 @@ def test_site_crawler_numbered_pages(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         dry_run=True,
         resume=True,
         assets_dir=tmp_path / "assets",
-        flush_page_interval=1,
+        flush_product_interval=1,
     )
     html_page1 = """
     <div class="product"><a href="https://demo.example/p/1">1</a></div>
@@ -121,12 +132,50 @@ def test_site_crawler_numbered_pages(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     def flush_chunk(chunk: list[ProductRecord]) -> None:
         flushed.append([item.product_url for item in chunk])
 
-    crawler = SiteCrawler(context, site, flush_pages=1, flush_callback=flush_chunk)
+    crawler = SiteCrawler(context, site, flush_products=1, flush_callback=flush_chunk)
     result = crawler.crawl()
 
     assert len(result.records) == 3
     assert store.get(site.name, str(site.category_urls[0])).last_page == 2
     assert result.records[0].content_text.startswith("content-")
-    assert result.records[0].image_path == "/tmp/img.jpg"
+    assert result.records[0].image_path is None
+    assert result.records[0].category == "catalog"
     assert flushed and flushed[0][0] == "https://demo.example/p/1"
+    store.close()
+
+
+def test_site_crawler_respects_global_stop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    config = _global_config(tmp_path)
+    config.runtime.global_stop.stop_after_products = 2
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-1",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=10,
+    )
+    html = """
+    <div class="product"><a href="https://demo.example/p/1">1</a></div>
+    <div class="product"><a href="https://demo.example/p/2">2</a></div>
+    <div class="product"><a href="https://demo.example/p/3">3</a></div>
+    """
+    responses = {
+        "https://demo.example/catalog/": html,
+        "https://demo.example/catalog/?page=2": html,
+    }
+    fake_engine = FakeEngine(responses)
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: fake_engine)
+    monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: DummyContentFetcher())
+
+    crawler = SiteCrawler(context, site, flush_products=10)
+    result = crawler.crawl()
+
+    assert len(result.records) == 2
+    assert context.products_written == 2
     store.close()

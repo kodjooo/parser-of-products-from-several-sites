@@ -19,6 +19,12 @@ class CrawlService:
     def collect(self) -> list[SiteCrawlResult]:
         results: list[SiteCrawlResult] = []
         for site in self.context.sites:
+            if self.context.product_limit_reached():
+                logger.info(
+                    "Достигнут глобальный лимит по товарам, дальнейший обход остановлен",
+                    extra={"limit": self.context.config.runtime.global_stop.stop_after_products},
+                )
+                break
             if self.writer:
                 self.writer.prepare_site(site)
 
@@ -31,7 +37,7 @@ class CrawlService:
             crawler = SiteCrawler(
                 self.context,
                 site,
-                flush_pages=self.context.flush_page_interval,
+                flush_products=self.context.flush_product_interval,
                 flush_callback=flush_callback,
             )
             result = crawler.crawl()
@@ -43,4 +49,6 @@ class CrawlService:
                 },
             )
             results.append(result)
+            if self.context.product_limit_reached():
+                break
         return results

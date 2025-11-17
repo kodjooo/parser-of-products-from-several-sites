@@ -67,7 +67,7 @@ class BrowserEngine:
 
     def __init__(self, network: NetworkConfig):
         try:
-            from playwright.sync_api import sync_playwright
+            from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
         except ImportError as exc:  # pragma: no cover - зависит от опциональной либы
             raise RuntimeError(
                 "Для режима engine=browser требуется playwright. "
@@ -75,6 +75,7 @@ class BrowserEngine:
             ) from exc
 
         self.network = network
+        self._timeout_error = PlaywrightTimeoutError
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True)
         self._context = self._browser.new_context(user_agent=random.choice(network.user_agents))
@@ -83,7 +84,7 @@ class BrowserEngine:
         page = self._context.new_page()
         try:
             page.set_default_timeout(self.network.request_timeout_sec * 1000)
-            page.goto(request.url, wait_until="domcontentloaded")
+            self._goto_with_retry(page, request.url)
             self._apply_wait_conditions(page, request.wait_conditions)
             if request.pagination.mode == "infinite_scroll":
                 self._perform_infinite_scroll(page, request.scroll_limit or request.pagination.max_scrolls or 30)
@@ -91,6 +92,28 @@ class BrowserEngine:
             return html
         finally:
             page.close()
+
+    def _goto_with_retry(self, page, url: str) -> None:
+        attempts = max(1, self.network.retry.max_attempts)
+        backoff = self.network.retry.backoff_sec or [1]
+        for attempt in range(attempts):
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                return
+            except self._timeout_error as exc:  # pragma: no cover — зависит от внешнего сайта
+                wait = backoff[min(attempt, len(backoff) - 1)]
+                logger.warning(
+                    "Timeout при загрузке страницы браузером, повтор",
+                    extra={
+                        "url": url,
+                        "attempt": attempt + 1,
+                        "max_attempts": attempts,
+                        "wait": wait,
+                    },
+                )
+                if attempt == attempts - 1:
+                    raise RuntimeError(f"Не удалось загрузить {url}") from exc
+                page.wait_for_timeout(wait * 1000)
 
     def _apply_wait_conditions(self, page, conditions: Iterable[WaitCondition]) -> None:
         for condition in conditions:

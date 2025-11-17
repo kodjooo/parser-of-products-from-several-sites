@@ -1,0 +1,67 @@
+site:
+  # Уникальный идентификатор сайта (используется в state/логах)
+  name: "globalalco-5"
+  # Домен, который пойдёт в колонку source_site и будет именем вкладки в Google Sheets
+  domain: "globalalco.ru"
+  # Базовый URL для нормализации относительных ссылок
+  base_url: "https://globalalco.ru"
+  # Движок обхода: http — requests + парсинг, browser — Playwright (для сайтов с js/инфинит-скроллом)
+  engine: "browser"  # допустимые значения: http | browser
+
+selectors:
+  # CSS-селектор, который указывает на ссылку товара на странице категории
+  product_link_selector: "div.goods div.panel-body a.img"
+  # Ограничение доменов, которые разрешено сохранять (оставьте пустым, если не нужно фильтровать)
+  allowed_domains: ["globalalco.ru"]
+  # Селектор основного изображения на странице товара
+  main_image_selector: "a.thumbnail.main-photo.main-photo-mobile img"
+  # Блоки, после которых не нужно сохранять текст товара целиком (обрезаются вместе с ними)
+  content_drop_after:
+    - "div#analog-block-wide"
+  # Дополнительные поля карточки
+  name_en_selector: "div.item-page h1"
+  name_ru_selector: "div.item-page div.product-h1"
+  price_without_discount_selector: "div.priceblock-large span.item-price-big"
+  price_with_discount_selector: "div.priceblock-large s.oldprice"
+  category_labels:
+    Wine: "вино"
+    sparkling-wine-1969: "игристое"
+    krepkie-napitki: "крепкие напитки"
+    Liquor: "ликёры"
+
+pagination:
+  # Тип пагинации:
+  #   numbered_pages — ?page=2, ?page=3 ...
+  #   next_button — кнопка «Далее»/«Показать ещё»
+  #   infinite_scroll — бесконечная прокрутка
+  mode: "numbered_pages"
+  # Название параметра страницы для numbered_pages (если используется другой параметр)
+  param_name: "page"
+  # Жёсткий лимит страниц (если неизвестно, укажите примерное число)
+  max_pages: 1200
+  # Для next_button можно дополнительно указать селектор кнопки:
+  next_button_selector: "#pages_next"
+
+limits:
+  # Максимум товаров, который можно собрать для категории (null — без ограничения)
+  max_products: null
+  # Ограничение по скроллам для infinite_scroll (игнорируется для numbered_pages/next_button)
+  max_scrolls: 200
+
+wait_conditions:
+  # Условие ожидания: type=selector — ждём появления элемента; type=delay — просто ждём N секунд
+  - type: "selector"
+    value: "div.goods div.panel-body"
+    timeout_sec: 15
+
+stop_conditions:
+  # Пример: если исчезает блок пагинации, останавливаемся
+  - type: "missing_selector"
+    value: "#pages_next"
+
+category_urls:
+  # Список категорий, которые нужно обойти (для каждой будет своя вкладка source_category)
+  - "https://www.globalalco.ru/items/Wine"
+  - "https://www.globalalco.ru/items/sparkling-wine-1969"
+  - "https://www.globalalco.ru/items/krepkie-napitki"
+  - "https://www.globalalco.ru/items/Liquor"

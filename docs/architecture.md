@@ -10,9 +10,9 @@ CLI инициализирует раннер (`app.workflow.runner.AgentRunner`
 ## 2. Компоненты
 - `app.cli` — интерфейс командной строки, валидирует параметры запуска.
 - `app.workflow.runner` — координация этапов выполнения (config -> state -> crawler -> sheets).
-- `app.config` — модели и загрузчик конфигураций (общая YAML и отдельные конфиги сайтов).
+- `app.config` — модели и загрузчик конфигураций (общая YAML и отдельные конфиги сайтов, включая `selectors.content_drop_after` для среза контента товаров).
 - `app.crawler` — движки обхода (HTTP и Playwright), пагинация и дедуп на уровне запуска.
-- `app.sheets` — клиент Google Sheets (OAuth2, batchUpdate, вкладки `_state` и `_runs`).
+- `app.sheets` — клиент Google Sheets (OAuth2, batchUpdate, вкладки `_state` и `_runs`, поддержка доменной импёрсонации сервисного аккаунта через `GOOGLE_OAUTH_IMPERSONATED_USER`, автосоздание строк заголовков вкладок (`source_site`, `category`, `category_url`, `product_url`, …, `llm_raw`).
 - `app.state` — локальное хранилище (SQLite/JSONL) и синхронизация со скрытой вкладкой `_state`.
 - `app.logger` — единая точка настройки Rich-логов.
 
@@ -104,16 +104,16 @@ category_urls:
 - Конфиги монтируются в `/app/config`, состояние и credentials — в `/var/app/state` и `/secrets`.
 
 ## 6. Файл `.env`
-Используется для передачи путей к конфигурациям, state и OAuth-файлам. Все переменные снабжены комментариями с описанием источников доступа. Переменная `WRITE_FLUSH_PAGE_INTERVAL` определяет, как часто (в страницах) агент будет отправлять накопленные данные в Google Sheets, чтобы итоговые записи появлялись даже при прерывании запуска.
+Используется для передачи путей к конфигурациям, state и OAuth-файлам. Все переменные снабжены комментариями с описанием источников доступа. Переменная `WRITE_FLUSH_PRODUCT_INTERVAL` определяет, как часто (в товарах) агент будет отправлять накопленные данные в Google Sheets, чтобы итоговые записи появлялись даже при прерывании запуска (для обратной совместимости поддерживается `WRITE_FLUSH_PAGE_INTERVAL`).
 
 ## 7. Следующие этапы
 По завершении каждого этапа (config/state/crawler/sheets/надёжность) этот документ будет дополняться деталями реализации и диаграммами потоков.
 
 ## 8. Этап 3 — модуль обхода
 - `app.crawler.engines` реализует `HttpEngine` (httpx + ретраи) и `BrowserEngine` (Playwright sync API, скролл для infinite_scroll). Общий интерфейс `EngineRequest`.
-- `app.crawler.site_crawler.SiteCrawler` поддерживает все три режима пагинации, wait/stop-conditions, счётчики, дедуп, обновление `StateStore`, а также умеет отдавать данные порциями каждые `WRITE_FLUSH_PAGE_INTERVAL` страниц.
+- `app.crawler.site_crawler.SiteCrawler` поддерживает все три режима пагинации, wait/stop-conditions, счётчики, дедуп, обновление `StateStore`, а также умеет отдавать данные порциями каждые `WRITE_FLUSH_PRODUCT_INTERVAL` товаров.
 - `app.crawler.service.CrawlService` поочерёдно запускает `SiteCrawler` для каждого сайта и возвращает список `SiteCrawlResult`.
-- `app.crawler.content_fetcher.ProductContentFetcher` скачивает карточку товара, извлекает текст без тегов и сохраняет основное изображение (транслитом названия); при наличии `selectors.main_image_selector` берёт картинку по заданному CSS-селектору.
+- `app.crawler.content_fetcher.ProductContentFetcher` скачивает карточку товара, извлекает текст без тегов и отдаёт ссылку на основное изображение, а сохранением файлов занимается `app.media.image_saver.ImageSaver` в момент записи строки (что гарантирует появление только "валидных" изображений).
 - Нормализация ссылок и md5-хэш находятся в `app.crawler.utils.normalize_url`.
 
 ## 9. Этап 4 — запись в Google Sheets

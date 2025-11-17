@@ -11,6 +11,7 @@ console = Console()
 cli = typer.Typer(help="Гибкий агент сбора ссылок товаров из категорий сайтов.")
 
 
+@cli.command("run")
 def run_agent(
     config_path: Optional[Path] = typer.Option(
         None,
@@ -73,10 +74,6 @@ def run_agent(
     )
     runner.run(options)
     console.print("[bold green]Запуск агента завершён[/bold green]")
-
-
-cli.command("run")(run_agent)
-cli.callback()(run_agent)
 
 
 def entrypoint() -> None:

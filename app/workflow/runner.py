@@ -63,9 +63,12 @@ class AgentRunner:
 
         assets_dir = Path(os.getenv("PRODUCT_IMAGE_DIR", "/app/assets/images"))
         assets_dir.mkdir(parents=True, exist_ok=True)
-        flush_pages = int(os.getenv("WRITE_FLUSH_PAGE_INTERVAL", "5") or "5")
-        if flush_pages < 1:
-            flush_pages = 5
+        flush_products_env = os.getenv("WRITE_FLUSH_PRODUCT_INTERVAL")
+        if not flush_products_env:
+            flush_products_env = os.getenv("WRITE_FLUSH_PAGE_INTERVAL")
+        flush_products = int(flush_products_env or "5")
+        if flush_products < 1:
+            flush_products = 5
 
         context = RuntimeContext(
             run_id=run_id,
@@ -76,7 +79,7 @@ class AgentRunner:
             dry_run=options.dry_run,
             resume=options.resume,
             assets_dir=assets_dir,
-            flush_page_interval=flush_pages,
+            flush_product_interval=flush_products,
         )
         try:
             self._execute(context)

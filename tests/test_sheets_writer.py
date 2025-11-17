@@ -19,12 +19,16 @@ class FakeSheetsClient:
         self.appended: dict[str, list[list[str]]] = {}
         self.existing: dict[str, set[str]] = {"demo.example": {"https://demo/p/1"}}
         self.state_rows: list[list[str]] = []
+        self.headers: dict[str, list[str]] = {}
 
     def ensure_tabs(self, tab_names):
         self.tabs.update(tab_names)
 
     def ensure_aux_tabs(self, *tab_names):
         self.tabs.update(tab_names)
+
+    def ensure_header(self, tab_name: str, header: list[str]) -> None:
+        self.headers[tab_name] = header
 
     def get_existing_product_urls(self, tab_name: str) -> set[str]:
         return set(self.existing.get(tab_name, set()))
@@ -51,6 +55,19 @@ class StateStub:
 
     def iter_all(self):
         return iter(self._items)
+
+
+class FakeImageSaver:
+    def __init__(self) -> None:
+        self.saved: list[str] = []
+
+    def save(self, url: str, title: str | None, fallback_id: str) -> str | None:
+        path = f"/tmp/{len(self.saved)+1}.jpg"
+        self.saved.append(path)
+        return path
+
+    def close(self) -> None:
+        return None
 
 
 def _global_config(tmp_path: Path) -> GlobalConfig:
@@ -93,15 +110,23 @@ def test_sheets_writer_deduplicates_and_exports_state(tmp_path: Path) -> None:
         product_url="https://demo/p/2",
         run_id="run-123",
         content_text="Описание товара",
-        image_path="/app/assets/images/product.jpg",
         image_url="https://cdn/images/product.jpg",
         metadata={"color": "red"},
+        image_name_hint="Demo Product",
+        category="catalog",
+        name_en="Demo EN",
+        name_ru="Демо",
+        price_without_discount="1000",
+        price_with_discount="900",
+        note="Первая запись",
+        status="Не обработано",
     )
     record_dup = ProductRecord(
         source_site="demo.example",
         category_url="https://demo.example/catalog/",
         product_url="https://demo/p/1",
         run_id="run-123",
+        category="catalog",
     )
     result = SiteCrawlResult(
         site_name="demo",
@@ -124,7 +149,8 @@ def test_sheets_writer_deduplicates_and_exports_state(tmp_path: Path) -> None:
     os.environ["GOOGLE_OAUTH_CLIENT_SECRET_PATH"] = str(secret_path)
     os.environ["GOOGLE_OAUTH_TOKEN_PATH"] = str(tmp_path / "token.json")
     os.environ["GOOGLE_OAUTH_SCOPES"] = "https://www.googleapis.com/auth/spreadsheets"
-    writer = SheetsWriter(context, client=fake_client)  # type: ignore[arg-type]
+    image_saver = FakeImageSaver()
+    writer = SheetsWriter(context, client=fake_client, image_saver=image_saver)  # type: ignore[arg-type]
     site = SiteConfig.model_validate(
         {
             "site": {"name": "demo", "domain": "demo.example"},
@@ -139,8 +165,17 @@ def test_sheets_writer_deduplicates_and_exports_state(tmp_path: Path) -> None:
     writer.finalize([result])
 
     appended_row = fake_client.appended["demo.example"][0]
-    assert appended_row[2] == "https://demo/p/2"
-    assert appended_row[3] == "Описание товара"
-    assert appended_row[-1] == "/app/assets/images/product.jpg"
-    assert "image_url=https://cdn/images/product.jpg" in appended_row[-2]
+    assert appended_row[1] == "catalog"
+    assert appended_row[2] == "https://demo.example/catalog/"
+    assert appended_row[3] == "https://demo/p/2"
+    assert appended_row[4] == "Описание товара"
+    assert appended_row[10] == "1.jpg"
+    assert appended_row[11] == "Demo EN"
+    assert appended_row[12] == "Демо"
+    assert appended_row[13] == "1000"
+    assert appended_row[14] == "900"
+    assert appended_row[15] == "Не обработано"
+    assert appended_row[16] == "Первая запись"
+    assert "image_url=https://cdn/images/product.jpg" in appended_row[9]
     assert fake_client.state_rows[0][0] == "demo"
+    assert fake_client.headers["demo.example"] == SheetsWriter.SITE_HEADER

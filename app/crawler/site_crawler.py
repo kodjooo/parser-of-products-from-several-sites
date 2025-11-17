@@ -33,7 +33,7 @@ class SiteCrawler:
         self,
         context: RuntimeContext,
         site: SiteConfig,
-        flush_pages: int = 0,
+        flush_products: int = 0,
         flush_callback: Optional[Callable[[list[ProductRecord]], None]] = None,
     ):
         self.context = context
@@ -43,10 +43,9 @@ class SiteCrawler:
         self.content_fetcher = ProductContentFetcher(context.config.network, assets_dir)
         self.dedupe_strip = context.config.dedupe.strip_params_blacklist
         self._seen_urls: set[str] = set()
-        self.flush_pages = max(1, flush_pages) if flush_pages else 0
+        self.flush_products = max(1, flush_products) if flush_products else 0
         self.flush_callback = flush_callback
         self._pending_chunk: list[ProductRecord] = []
-        self._pages_since_flush = 0
 
     def crawl(self) -> SiteCrawlResult:
         logger.info("Старт обхода сайта", extra={"site": self.site.name})
@@ -57,6 +56,8 @@ class SiteCrawler:
                 category_result = self._crawl_category(category_url)
                 records.extend(category_result.records)
                 metrics.append(category_result.metrics)
+                if self._global_stop_reached():
+                    break
         finally:
             self.engine.shutdown()
             self.content_fetcher.close()
@@ -88,7 +89,7 @@ class SiteCrawler:
         metrics = CategoryMetrics(site_name=self.site.name, category_url=category_url)
         records: list[ProductRecord] = []
         page = start_page
-        while page <= max_pages:
+        while page <= max_pages and not self._global_stop_reached():
             url = self._build_page_url(category_url, page)
             html = self._fetch_page_html(url)
             page_records, has_data, limit_hit = self._process_html(
@@ -96,7 +97,6 @@ class SiteCrawler:
             )
             records.extend(page_records)
             self._queue_for_flush(page_records)
-            self._mark_page_processed()
             if not has_data:
                 break
             metrics.last_page = page
@@ -112,14 +112,13 @@ class SiteCrawler:
         records: list[ProductRecord] = []
         max_pages = self.site.limits.max_pages or self.site.pagination.max_pages or 100
         page = 1
-        while next_url and page <= max_pages:
+        while next_url and page <= max_pages and not self._global_stop_reached():
             html = self._fetch_page_html(next_url)
             page_records, has_data, limit_hit = self._process_html(
                 html, category_url, page, metrics
             )
             records.extend(page_records)
             self._queue_for_flush(page_records)
-            self._mark_page_processed()
             metrics.last_page = page
             self._persist_state(category_url, last_page=page, total=len(records))
             if not has_data or limit_hit or self._should_stop(metrics):
@@ -198,17 +197,36 @@ class SiteCrawler:
                 page_num=page_num,
                 run_id=self.context.run_id,
                 product_id_hash=product_hash,
+                category=self._map_category_slug(category_url),
             )
             content = self.content_fetcher.fetch(
-                normalized, image_selector=self.site.selectors.main_image_selector
+                normalized,
+                image_selector=self.site.selectors.main_image_selector,
+                drop_after_selectors=self.site.selectors.content_drop_after,
+                download_image=False,
+                name_en_selector=self.site.selectors.name_en_selector,
+                name_ru_selector=self.site.selectors.name_ru_selector,
+                price_without_discount_selector=self.site.selectors.price_without_discount_selector,
+                price_with_discount_selector=self.site.selectors.price_with_discount_selector,
             )
             record.content_text = content.text_content
             record.image_url = content.image_url
             record.image_path = content.image_path
+            record.image_name_hint = content.title
+            record.name_en = content.name_en
+            record.name_ru = content.name_ru
+            record.price_without_discount = content.price_without_discount
+            record.price_with_discount = content.price_with_discount
             self._seen_urls.add(normalized)
             records.append(record)
             metrics.total_written += 1
+            if self.context.register_product():
+                limit_hit = True
+                break
             if self._reached_product_limit(metrics):
+                limit_hit = True
+                break
+            if self._global_stop_reached():
                 limit_hit = True
                 break
         return records, bool(records), limit_hit
@@ -246,6 +264,22 @@ class SiteCrawler:
             (parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, "")
         )
 
+    def _extract_category_slug(self, category_url: str) -> str | None:
+        parsed = urlparse(category_url)
+        path = parsed.path or ""
+        marker = "/items/"
+        if marker in path:
+            slug = path.split(marker, 1)[1]
+            return slug.strip("/")
+        return path.strip("/") or None
+
+    def _map_category_slug(self, category_url: str) -> str | None:
+        slug = self._extract_category_slug(category_url)
+        if not slug:
+            return None
+        labels = self.site.selectors.category_labels
+        return labels.get(slug, slug)
+
     def _persist_state(self, category_url: str, *, last_page: int, total: int) -> None:
         self.context.state_store.upsert(
             CategoryState(
@@ -273,23 +307,19 @@ class SiteCrawler:
         if not self.flush_callback or not new_records:
             return
         self._pending_chunk.extend(new_records)
-
-    def _mark_page_processed(self) -> None:
-        if not self.flush_callback or self.flush_pages <= 0:
-            return
-        self._pages_since_flush += 1
-        if self._pages_since_flush >= self.flush_pages:
+        if self.flush_products > 0 and len(self._pending_chunk) >= self.flush_products:
             self._emit_pending()
 
     def _emit_pending(self, force: bool = False) -> None:
         if not self.flush_callback:
             return
         if not self._pending_chunk:
-            if force:
-                self._pages_since_flush = 0
             return
-        if force or (self.flush_pages > 0 and self._pages_since_flush >= self.flush_pages):
+        if force or (self.flush_products > 0 and len(self._pending_chunk) >= self.flush_products):
             chunk = self._pending_chunk
             self._pending_chunk = []
-            self._pages_since_flush = 0
             self.flush_callback(chunk)
+            # после записи начинаем отсчёт заново
+
+    def _global_stop_reached(self) -> bool:
+        return self.context.product_limit_reached()

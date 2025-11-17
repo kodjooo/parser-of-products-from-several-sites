@@ -13,13 +13,25 @@
 Одна вкладка на сайт, имя вкладки = ДОМЕН_сайта (например, alcoplaza.ru).  
 Столбцы (минимальный состав):  
 - A: source_site (домен)  
-- B: category_url (исходная категория)  
-- C: product_url (абсолютная ссылка на товар)  
-- D: discovered_at (ISO8601, UTC)  
-- E: run_id (UUID запуска)  
-- F: status (new | duplicate | failed)  
-- G: note (ошибка/причина, если есть)  
-Дополнительно допускаются: product_id_hash (md5 от product_url), page_num, depth, и т. п.
+- B: category (часть URL после `/items/`)  
+- C: category_url (исходная категория)  
+- D: product_url (абсолютная ссылка на товар)  
+- E: product_content (очищенный текст)  
+- F: discovered_at (ISO8601, UTC)  
+- G: run_id (UUID запуска)  
+- H: product_id_hash (md5 от product_url)  
+- I: page_num  
+- J: metadata (image_url и т.п.)  
+- K: image_path (имя сохранённого файла в каталоге изображений)  
+- L: name (en)  
+- M: name (ru)  
+- N: price (without discount)  
+- O: price (with discount)  
+- P: status (по умолчанию «Не обработано»)  
+- Q: note (ошибка/причина, если есть)  
+- R: processed_at  
+- S: llm_raw  
+Дополнительно допускаются другие служебные поля (depth, score, и т. п.).
 
 4) Правила записи в таблицу  
 — Идемпотентность: не записывать дубликаты product_url в пределах вкладки.  
@@ -39,6 +51,7 @@
    • сработало правило stop_conditions (например, исчез блок пагинации).  
 — Все относительные ссылки нормализовать в абсолютные через base_url.  
 — Исключать явные дубликаты на уровне текущего запуска (мультимножество фильтруется по URL).
+— Для страниц товаров предусмотреть возможность обрезать текст после заданных блоков (например, отзывы). Список CSS-селекторов задаётся в конфиге сайта (`selectors.content_drop_after`); найденный блок и всё, что идёт после него, не попадает в `product_content`. Дополнительно конфиг должен поддерживать селекторы для имён/цен (`name_en_selector`, `name_ru_selector`, `price_without_discount_selector`, `price_with_discount_selector`) и словарь `category_labels` для перевода slug → названия категории.
 
 6) Надёжность и антиблок  
 — User-Agent ротация, опционально прокси-пул.  

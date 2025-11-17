@@ -7,6 +7,7 @@ from typing import Iterable, Sequence
 from collections.abc import Callable
 
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
@@ -28,12 +29,14 @@ class GoogleSheetsClient:
         token_path: Path,
         scopes: Sequence[str],
         batch_size: int,
+        subject: str | None = None,
     ):
         self.spreadsheet_id = spreadsheet_id
         self.client_secret_path = client_secret_path
         self.token_path = token_path
         self.scopes = list(scopes)
         self.batch_size = batch_size
+        self.subject = subject
         self._client_config_type = self._detect_client_type()
         self.service = build("sheets", "v4", credentials=self._authorize())
 
@@ -63,9 +66,12 @@ class GoogleSheetsClient:
 
     def _authorize(self) -> Credentials:
         if self._client_config_type == "service_account":
-            return service_account.Credentials.from_service_account_file(
+            creds = service_account.Credentials.from_service_account_file(
                 str(self.client_secret_path), scopes=self.scopes
             )
+            if self.subject:
+                creds = creds.with_subject(self.subject)
+            return creds
         creds = None
         if self.token_path.exists():
             creds = Credentials.from_authorized_user_file(
@@ -131,30 +137,65 @@ class GoogleSheetsClient:
     def append_rows(self, tab_name: str, rows: list[list[str]]) -> None:
         if not rows:
             return
-        data = []
         for chunk_start in range(0, len(rows), self.batch_size):
             chunk = rows[chunk_start : chunk_start + self.batch_size]
-            width = len(chunk[0]) if chunk and chunk[0] else 1
-            range_ref = f"{tab_name}!A:{_column_name(width)}"
-            data.append(
-                {
-                    "range": range_ref,
-                    "majorDimension": "ROWS",
-                    "values": chunk,
-                }
+            body = {"values": chunk}
+            self._retry_call(
+                lambda chunk=chunk: self.service.spreadsheets()
+                .values()
+                .append(
+                    spreadsheetId=self.spreadsheet_id,
+                    range=tab_name,
+                    valueInputOption="RAW",
+                    insertDataOption="INSERT_ROWS",
+                    body=body,
+                )
+                .execute()
             )
-        body = {"valueInputOption": "RAW", "data": data}
-        self._retry_call(
-            lambda: self.service.spreadsheets()
-            .values()
-            .batchUpdate(spreadsheetId=self.spreadsheet_id, body=body)
-            .execute()
-        )
 
     def append_runs(self, rows: list[list[str]], tab_name: str) -> None:
         if not rows:
             return
         self.append_rows(tab_name, rows)
+
+    def ensure_header(self, tab_name: str, header: list[str]) -> None:
+        range_name = f"{tab_name}!1:1"
+        try:
+            response = self._retry_call(
+                lambda: self.service.spreadsheets()
+                .values()
+                .get(spreadsheetId=self.spreadsheet_id, range=range_name)
+                .execute()
+            )
+            values = response.get("values", [])
+        except HttpError as exc:
+            if exc.resp.status in {400, 404}:
+                values = []
+            else:
+                raise
+        if values:
+            existing = values[0]
+            if len(existing) >= len(header) and all(
+                (existing[i] if i < len(existing) else "").strip() == header[i]
+                for i in range(len(header))
+            ):
+                return
+        body = {
+            "range": range_name,
+            "majorDimension": "ROWS",
+            "values": [header],
+        }
+        self._retry_call(
+            lambda: self.service.spreadsheets()
+            .values()
+            .update(
+                spreadsheetId=self.spreadsheet_id,
+                range=range_name,
+                valueInputOption="RAW",
+                body=body,
+            )
+            .execute()
+        )
 
     def replace_state_rows(self, tab_name: str, rows: list[list[str]]) -> None:
         clear_body = {}

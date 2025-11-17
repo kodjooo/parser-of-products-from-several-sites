@@ -17,7 +17,7 @@ class ProductRecord:
     discovered_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
-    status: Status = "new"
+    status: Status = "Не обработано"
     note: str | None = None
     page_num: int | None = None
     product_id_hash: str | None = None
@@ -25,6 +25,15 @@ class ProductRecord:
     content_text: str | None = None
     image_url: str | None = None
     image_path: str | None = None
+    image_name_hint: str | None = None
+    category: str | None = None
+    status_note: str | None = None
+    processed_at: datetime | None = None
+    llm_raw: str | None = None
+    name_en: str | None = None
+    name_ru: str | None = None
+    price_without_discount: str | None = None
+    price_with_discount: str | None = None
 
 
 @dataclass(slots=True)
