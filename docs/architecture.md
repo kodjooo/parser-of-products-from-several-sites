@@ -97,6 +97,7 @@ limits:
 category_urls:
   - "https://alcoplaza.ru/catalog/vodka/"
 ```
+Селекторы для цен являются настраиваемыми: `price_with_discount_selector` может быть строкой или списком — в последнем случае агент проверяет каждый CSS-селектор по порядку, пока не найдёт цену со скидкой (это полезно, когда у сайта несколько вариантов вёрстки).
 
 ## 5. Контейнеризация
 - Docker образ на базе `python:3.12-slim`, установка зависимостей из `requirements.txt`.
@@ -113,7 +114,7 @@ category_urls:
 - `app.crawler.engines` реализует `HttpEngine` (httpx + ретраи) и `BrowserEngine` (Playwright sync API, скролл для infinite_scroll). Общий интерфейс `EngineRequest`.
 - `app.crawler.site_crawler.SiteCrawler` поддерживает все три режима пагинации, wait/stop-conditions, счётчики, дедуп, обновление `StateStore`, а также умеет отдавать данные порциями каждые `WRITE_FLUSH_PRODUCT_INTERVAL` товаров.
 - `app.crawler.service.CrawlService` поочерёдно запускает `SiteCrawler` для каждого сайта и возвращает список `SiteCrawlResult`.
-- `app.crawler.content_fetcher.ProductContentFetcher` скачивает карточку товара, извлекает текст без тегов и отдаёт ссылку на основное изображение, а сохранением файлов занимается `app.media.image_saver.ImageSaver` в момент записи строки (что гарантирует появление только "валидных" изображений).
+- `app.crawler.content_fetcher.ProductContentFetcher` скачивает карточку товара, извлекает текст без тегов и отдаёт ссылку на основное изображение, а сохранением файлов занимается `app.media.image_saver.ImageSaver` в момент записи строки (что гарантирует появление только "валидных" изображений). ImageSaver определяет расширение по заголовку `Content-Type`, поэтому ссылки с `image/webp` или `image/avif` сохраняются без принудительного преобразования в JPEG.
 - Нормализация ссылок и md5-хэш находятся в `app.crawler.utils.normalize_url`.
 
 ## 9. Этап 4 — запись в Google Sheets

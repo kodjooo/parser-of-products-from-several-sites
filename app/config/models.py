@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Any, Literal, Sequence
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -95,6 +95,9 @@ class PaginationConfig(BaseModel):
     max_scrolls: int | None = Field(default=100, ge=1)
 
 
+SelectorValue = str | list[str] | None
+
+
 class SelectorConfig(BaseModel):
     product_link_selector: str
     base_url: HttpUrl | None = None
@@ -109,7 +112,7 @@ class SelectorConfig(BaseModel):
     name_en_selector: str | None = None
     name_ru_selector: str | None = None
     price_without_discount_selector: str | None = None
-    price_with_discount_selector: str | None = None
+    price_with_discount_selector: SelectorValue = None
     category_labels: dict[str, str] = Field(default_factory=dict)
 
 

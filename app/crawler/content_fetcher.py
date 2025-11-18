@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Sequence
 from urllib.parse import urljoin
 
 import httpx
@@ -51,7 +51,7 @@ class ProductContentFetcher:
         name_en_selector: str | None = None,
         name_ru_selector: str | None = None,
         price_without_discount_selector: str | None = None,
-        price_with_discount_selector: str | None = None,
+        price_with_discount_selector: str | Sequence[str] | None = None,
     ) -> ProductContent:
         try:
             response = self.client.get(
@@ -127,14 +127,23 @@ def _strip_after_selectors(soup: BeautifulSoup, selectors: Sequence[str]) -> Non
             target.decompose()
 
 
-def _extract_text_by_selector(soup: BeautifulSoup, selector: str | None) -> str | None:
+def _extract_text_by_selector(
+    soup: BeautifulSoup, selector: str | Sequence[str] | None
+) -> str | None:
     if not selector:
         return None
-    node = soup.select_one(selector)
-    if not node:
-        return None
-    text = node.get_text(" ", strip=True)
-    return text or None
+    if isinstance(selector, str):
+        selectors = [selector]
+    else:
+        selectors = [item for item in selector if item]
+    for css in selectors:
+        node = soup.select_one(css)
+        if not node:
+            continue
+        text = node.get_text(" ", strip=True)
+        if text:
+            return text
+    return None
 
 
 def _extract_title(soup: BeautifulSoup) -> str | None:

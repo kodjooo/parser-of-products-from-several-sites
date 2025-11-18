@@ -62,13 +62,21 @@ class ImageSaver:
 
 def _guess_extension(url: str, content_type: str | None) -> str:
     if content_type:
-        if "png" in content_type:
-            return "png"
-        if "gif" in content_type:
-            return "gif"
+        mime = content_type.split(";")[0].strip().lower()
+        mapping = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/jpg": "jpg",
+            "image/gif": "gif",
+            "image/webp": "webp",
+            "image/avif": "avif",
+            "image/svg+xml": "svg",
+        }
+        if mime in mapping:
+            return mapping[mime]
     parsed = urlparse(url)
     ext = os.path.splitext(parsed.path)[1].lower().strip(".")
-    if ext in {"jpg", "jpeg", "png", "gif", "webp"}:
+    if ext in {"jpg", "jpeg", "png", "gif", "webp", "avif", "svg"}:
         return "jpg" if ext == "jpeg" else ext
     return "jpg"
 
