@@ -180,21 +180,34 @@ def _extract_main_image_url(soup: BeautifulSoup, base_url: str) -> str | None:
                 for part in srcset.split(",")
                 if part.strip()
             ]
-            best = None
-            best_width = -1
+            best_url = None
+            best_priority = -1
+            best_score = -1.0
             for candidate in candidates:
                 url_part = candidate[0]
-                width = 0
-                if len(candidate) > 1 and candidate[1].endswith("w"):
+                descriptor = candidate[1] if len(candidate) > 1 else ""
+                priority = 0
+                score = 0.0
+                if descriptor.endswith("w"):
+                    priority = 2
                     try:
-                        width = int(candidate[1][:-1])
+                        score = float(descriptor[:-1])
                     except ValueError:
-                        width = 0
-                if width > best_width:
-                    best_width = width
-                    best = url_part
-            if best:
-                return urljoin(base_url, best)
+                        score = 0.0
+                elif descriptor.endswith("x"):
+                    priority = 1
+                    try:
+                        score = float(descriptor[:-1])
+                    except ValueError:
+                        score = 0.0
+                if best_url is None or priority > best_priority or (
+                    priority == best_priority and score > best_score
+                ):
+                    best_url = url_part
+                    best_priority = priority
+                    best_score = score
+            if best_url:
+                return urljoin(base_url, best_url)
 
     # 4) первый img с src
     img = soup.find("img", src=True)

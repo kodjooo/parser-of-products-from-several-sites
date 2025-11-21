@@ -10,6 +10,7 @@ from pydantic import (
     PositiveInt,
     RootModel,
     field_validator,
+    model_validator,
 )
 
 
@@ -31,6 +32,7 @@ class NetworkConfig(BaseModel):
     proxy_pool: list[str] = Field(default_factory=list)
     request_timeout_sec: float = Field(default=30, gt=0)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
+    browser_storage_state_path: Path | None = None
 
     @field_validator("user_agents")
     @classmethod
@@ -55,11 +57,33 @@ class GlobalStopConfig(BaseModel):
     stop_after_minutes: int | None = None
 
 
+class DelayConfig(BaseModel):
+    min_sec: float = Field(default=0.0, ge=0)
+    max_sec: float = Field(default=0.0, ge=0)
+
+    @model_validator(mode="after")
+    def _ensure_bounds(self) -> "DelayConfig":
+        if self.max_sec < self.min_sec:
+            msg = "max_sec должен быть не меньше min_sec"
+            raise ValueError(msg)
+        return self
+
+
+def _default_page_delay() -> DelayConfig:
+    return DelayConfig(min_sec=5.0, max_sec=8.0)
+
+
+def _default_product_delay() -> DelayConfig:
+    return DelayConfig(min_sec=8.0, max_sec=12.0)
+
+
 class RuntimeConfig(BaseModel):
     """Общие лимиты выполнения."""
 
     max_concurrency_per_site: PositiveInt = Field(default=1, le=10)
     global_stop: GlobalStopConfig = Field(default_factory=GlobalStopConfig)
+    page_delay: DelayConfig = Field(default_factory=_default_page_delay)
+    product_delay: DelayConfig = Field(default_factory=_default_product_delay)
 
 
 class DedupeConfig(BaseModel):

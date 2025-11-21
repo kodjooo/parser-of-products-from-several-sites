@@ -66,16 +66,26 @@ def test_load_global_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SHEET_STATE_TAB", "_state")
     monkeypatch.setenv("SHEET_RUNS_TAB", "_runs")
     monkeypatch.setenv("RUNTIME_MAX_CONCURRENCY_PER_SITE", "3")
+    monkeypatch.setenv("RUNTIME_PAGE_DELAY_MIN_SEC", "6")
+    monkeypatch.setenv("RUNTIME_PAGE_DELAY_MAX_SEC", "9")
+    monkeypatch.setenv("RUNTIME_PRODUCT_DELAY_MIN_SEC", "10")
+    monkeypatch.setenv("RUNTIME_PRODUCT_DELAY_MAX_SEC", "14")
     monkeypatch.setenv("NETWORK_USER_AGENTS", "env-agent-1,env-agent-2")
     monkeypatch.setenv("NETWORK_REQUEST_TIMEOUT_SEC", "42")
     monkeypatch.setenv("NETWORK_RETRY_MAX_ATTEMPTS", "4")
     monkeypatch.setenv("NETWORK_RETRY_BACKOFF_SEC", "1,2,3")
+    monkeypatch.setenv("NETWORK_BROWSER_STORAGE_STATE_PATH", "/tmp/auth.json")
     monkeypatch.setenv("STATE_DATABASE_PATH", "/tmp/env-state.db")
 
     config = load_global_config(None)
     assert config.sheet.spreadsheet_id == "ENV_SHEET"
     assert config.runtime.max_concurrency_per_site == 3
     assert config.network.retry.max_attempts == 4
+    assert config.runtime.page_delay.min_sec == 6
+    assert config.runtime.page_delay.max_sec == 9
+    assert config.runtime.product_delay.min_sec == 10
+    assert config.runtime.product_delay.max_sec == 14
+    assert str(config.network.browser_storage_state_path) == "/tmp/auth.json"
 
 
 def test_iter_site_configs_supports_multiple_files(tmp_path: Path) -> None:

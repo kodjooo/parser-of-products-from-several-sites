@@ -7,6 +7,7 @@ from typing import Iterable
 from app.config.errors import ConfigLoaderError
 from app.config.models import (
     DedupeConfig,
+    DelayConfig,
     GlobalConfig,
     GlobalStopConfig,
     NetworkConfig,
@@ -32,6 +33,16 @@ def load_global_config_from_env() -> GlobalConfig:
             stop_after_products=_int("RUNTIME_STOP_AFTER_PRODUCTS"),
             stop_after_minutes=_int("RUNTIME_STOP_AFTER_MINUTES"),
         ),
+        page_delay=_delay_from_env(
+            prefix="RUNTIME_PAGE_DELAY",
+            default_min=5.0,
+            default_max=8.0,
+        ),
+        product_delay=_delay_from_env(
+            prefix="RUNTIME_PRODUCT_DELAY",
+            default_min=8.0,
+            default_max=12.0,
+        ),
     )
 
     network = NetworkConfig(
@@ -45,6 +56,7 @@ def load_global_config_from_env() -> GlobalConfig:
                 default=[2.0, 5.0, 10.0],
             ),
         ),
+        browser_storage_state_path=_path("NETWORK_BROWSER_STORAGE_STATE_PATH"),
     )
 
     dedupe = DedupeConfig(
@@ -65,6 +77,16 @@ def load_global_config_from_env() -> GlobalConfig:
         dedupe=dedupe,
         state=state,
     )
+
+
+def _delay_from_env(*, prefix: str, default_min: float, default_max: float) -> DelayConfig:
+    min_value = _float(f"{prefix}_MIN_SEC", default=default_min)
+    max_value = _float(f"{prefix}_MAX_SEC", default=default_max)
+    if min_value is None:
+        min_value = default_min
+    if max_value is None:
+        max_value = default_max
+    return DelayConfig(min_sec=min_value, max_sec=max_value)
 
 
 def _require(name: str) -> str:
@@ -126,3 +148,10 @@ def _float_list(name: str, default: Iterable[float] | None = None) -> list[float
         return [float(token) for token in tokens]
     except ValueError as exc:
         raise ConfigLoaderError(f"Элементы {name} должны быть числами") from exc
+
+
+def _path(name: str) -> Path | None:
+    value = os.getenv(name)
+    if not value:
+        return None
+    return Path(value)

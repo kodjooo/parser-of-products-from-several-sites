@@ -113,6 +113,8 @@ category_urls:
 ## 8. Этап 3 — модуль обхода
 - `app.crawler.engines` реализует `HttpEngine` (httpx + ретраи) и `BrowserEngine` (Playwright sync API, скролл для infinite_scroll). Общий интерфейс `EngineRequest`.
 - `app.crawler.site_crawler.SiteCrawler` поддерживает все три режима пагинации, wait/stop-conditions, счётчики, дедуп, обновление `StateStore`, а также умеет отдавать данные порциями каждые `WRITE_FLUSH_PRODUCT_INTERVAL` товаров.
+- Паузы между страницами категорий и карточками конфигурируются через `.env` (`RUNTIME_PAGE_DELAY_*`, `RUNTIME_PRODUCT_DELAY_*`). Для каждого запроса применяется рандомный джиттер внутри указанного диапазона, что снижает риск блокировок IP.
+- `BrowserEngine` может загружать ранее экспортированный `storage_state` (cookies, localStorage) — путь задаётся через `NETWORK_BROWSER_STORAGE_STATE_PATH`. Это позволяет запускать обход от имени существующей пользовательской сессии и обходить антиботы, требующие авторизации.
 - `app.crawler.service.CrawlService` поочерёдно запускает `SiteCrawler` для каждого сайта и возвращает список `SiteCrawlResult`.
 - `app.crawler.content_fetcher.ProductContentFetcher` скачивает карточку товара, извлекает текст без тегов и отдаёт ссылку на основное изображение, а сохранением файлов занимается `app.media.image_saver.ImageSaver` в момент записи строки (что гарантирует появление только "валидных" изображений). ImageSaver определяет расширение по заголовку `Content-Type`, поэтому ссылки с `image/webp` или `image/avif` сохраняются без принудительного преобразования в JPEG.
 - Нормализация ссылок и md5-хэш находятся в `app.crawler.utils.normalize_url`.

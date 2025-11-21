@@ -8,7 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 
-from app.config.models import SiteConfig
+from app.config.models import DelayConfig, SiteConfig
 from app.crawler.content_fetcher import ProductContentFetcher
 from app.crawler.engines import EngineRequest, create_engine
 from app.crawler.models import CategoryMetrics, ProductRecord, SiteCrawlResult
@@ -46,6 +46,8 @@ class SiteCrawler:
         self.flush_products = max(1, flush_products) if flush_products else 0
         self.flush_callback = flush_callback
         self._pending_chunk: list[ProductRecord] = []
+        self._page_delay: DelayConfig = context.config.runtime.page_delay
+        self._product_delay: DelayConfig = context.config.runtime.product_delay
 
     def crawl(self) -> SiteCrawlResult:
         logger.info("Старт обхода сайта", extra={"site": self.site.name})
@@ -151,7 +153,7 @@ class SiteCrawler:
         while not self._wait_conditions_met(html) and retries < 2:
             html = self.engine.fetch_html(request)
             retries += 1
-        jitter_sleep()
+        self._sleep_between_pages()
         return html
 
     def _wait_conditions_met(self, html: str) -> bool:
@@ -229,6 +231,7 @@ class SiteCrawler:
             if self._global_stop_reached():
                 limit_hit = True
                 break
+            self._sleep_between_products()
         return records, bool(records), limit_hit
 
     def _should_stop_on_missing_selector(self, soup: BeautifulSoup) -> bool:
@@ -237,6 +240,16 @@ class SiteCrawler:
                 if not soup.select(condition.value):
                     return True
         return False
+
+    def _sleep_between_pages(self) -> None:
+        if self._page_delay.max_sec <= 0:
+            return
+        jitter_sleep(self._page_delay.min_sec, self._page_delay.max_sec)
+
+    def _sleep_between_products(self) -> None:
+        if self._product_delay.max_sec <= 0:
+            return
+        jitter_sleep(self._product_delay.min_sec, self._product_delay.max_sec)
 
     def _extract_product_links(self, soup: BeautifulSoup) -> list[str]:
         nodes = soup.select(self.site.selectors.product_link_selector)

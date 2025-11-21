@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from app.crawler.content_fetcher import _extract_text_content, _extract_text_by_selector
+from app.crawler.content_fetcher import (
+    _extract_main_image_url,
+    _extract_text_content,
+    _extract_text_by_selector,
+)
 
 
 def test_extract_text_content_drops_after_selector():
@@ -33,3 +37,14 @@ def test_extract_text_by_selector_tries_fallbacks():
         soup, ["", ".missing-price", ".price .primary"]
     )
     assert value == "950"
+
+
+def test_extract_main_image_prefers_highest_descriptor():
+    html = """
+    <picture>
+        <img src="https://example.com/a-1x.webp" srcset="https://example.com/a-1x.webp 1x, https://example.com/a-2x.webp 2x">
+    </picture>
+    """
+    soup = BeautifulSoup(html, "lxml")
+    url = _extract_main_image_url(soup, "https://example.com/product")
+    assert url == "https://example.com/a-2x.webp"
