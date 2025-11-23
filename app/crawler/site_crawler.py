@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from app.config.models import DelayConfig, SiteConfig
+from app.crawler.behavior import BehaviorContext
 from app.crawler.content_fetcher import ProductContentFetcher
 from app.crawler.engines import EngineRequest, create_engine
 from app.crawler.models import CategoryMetrics, ProductRecord, SiteCrawlResult
@@ -38,7 +39,8 @@ class SiteCrawler:
     ):
         self.context = context
         self.site = site
-        self.engine = create_engine(site.engine, context.config.network)
+        behavior_config = self._prepare_behavior_config(context.config.runtime.behavior)
+        self.engine = create_engine(site.engine, context.config.network, behavior_config)
         assets_dir = context.assets_dir if context.assets_dir else Path("/app/assets/images")
         self.content_fetcher = ProductContentFetcher(context.config.network, assets_dir)
         self.dedupe_strip = context.config.dedupe.strip_params_blacklist
@@ -147,6 +149,7 @@ class SiteCrawler:
             wait_conditions=self.site.wait_conditions,
             pagination=self.site.pagination,
             scroll_limit=scroll_limit,
+            behavior_context=self._build_behavior_context(category_url=url),
         )
         html = self.engine.fetch_html(request)
         retries = 0
@@ -162,6 +165,29 @@ class SiteCrawler:
             if condition.type == "selector" and not soup.select(condition.value):
                 return False
         return True
+
+    def _prepare_behavior_config(self, base_behavior):
+        behavior = base_behavior.model_copy()
+        hover_targets = self.site.selectors.hover_targets
+        if hover_targets:
+            mouse_cfg = behavior.mouse.model_copy(update={"hover_selectors": hover_targets})
+            behavior = behavior.model_copy(update={"mouse": mouse_cfg})
+        return behavior
+
+    def _build_behavior_context(self, category_url: str) -> BehaviorContext | None:
+        behavior = self.context.config.runtime.behavior
+        if not behavior.enabled:
+            return None
+        root_url = self.site.base_url
+        if not root_url:
+            parsed = urlparse(category_url)
+            root_url = f"{parsed.scheme}://{parsed.netloc}"
+        return BehaviorContext(
+            product_link_selector=self.site.selectors.product_link_selector,
+            category_url=category_url,
+            base_url=self.site.base_url or category_url,
+            root_url=root_url,
+        )
 
     def _process_html(
         self,

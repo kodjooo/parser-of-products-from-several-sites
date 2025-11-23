@@ -75,7 +75,13 @@ def test_load_global_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NETWORK_RETRY_MAX_ATTEMPTS", "4")
     monkeypatch.setenv("NETWORK_RETRY_BACKOFF_SEC", "1,2,3")
     monkeypatch.setenv("NETWORK_BROWSER_STORAGE_STATE_PATH", "/tmp/auth.json")
+    monkeypatch.setenv("NETWORK_BROWSER_HEADLESS", "false")
+    monkeypatch.setenv("NETWORK_ACCEPT_LANGUAGE", "ru-RU")
     monkeypatch.setenv("STATE_DATABASE_PATH", "/tmp/env-state.db")
+    monkeypatch.setenv("BEHAVIOR_ENABLED", "true")
+    monkeypatch.setenv("BEHAVIOR_MOUSE_MOVE_MIN", "2")
+    monkeypatch.setenv("BEHAVIOR_MOUSE_MOVE_MAX", "4")
+    monkeypatch.setenv("BEHAVIOR_NAV_EXTRA_PRODUCTS_LIMIT", "1")
 
     config = load_global_config(None)
     assert config.sheet.spreadsheet_id == "ENV_SHEET"
@@ -86,6 +92,11 @@ def test_load_global_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.runtime.product_delay.min_sec == 10
     assert config.runtime.product_delay.max_sec == 14
     assert str(config.network.browser_storage_state_path) == "/tmp/auth.json"
+    assert config.network.accept_language == "ru-RU"
+    assert config.network.browser_headless is False
+    assert config.runtime.behavior.enabled is True
+    assert config.runtime.behavior.mouse.move_count_min == 2
+    assert config.runtime.behavior.navigation.extra_products_limit == 1
 
 
 def test_iter_site_configs_supports_multiple_files(tmp_path: Path) -> None:

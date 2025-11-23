@@ -33,6 +33,8 @@ class NetworkConfig(BaseModel):
     request_timeout_sec: float = Field(default=30, gt=0)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
     browser_storage_state_path: Path | None = None
+    accept_language: str | None = None
+    browser_headless: bool = True
 
     @field_validator("user_agents")
     @classmethod
@@ -77,6 +79,63 @@ def _default_product_delay() -> DelayConfig:
     return DelayConfig(min_sec=8.0, max_sec=12.0)
 
 
+def _default_behavior_action_delay() -> DelayConfig:
+    return DelayConfig(min_sec=0.3, max_sec=0.9)
+
+
+class BehaviorScrollConfig(BaseModel):
+    probability: float = Field(default=0.7, ge=0.0, le=1.0)
+    skip_probability: float = Field(default=0.2, ge=0.0, le=1.0)
+    min_depth_percent: int = Field(default=25, ge=1, le=100)
+    max_depth_percent: int = Field(default=85, ge=1, le=100)
+    min_steps: int = Field(default=2, ge=1)
+    max_steps: int = Field(default=5, ge=1)
+    pause_between_steps: DelayConfig = Field(
+        default_factory=lambda: DelayConfig(min_sec=0.2, max_sec=0.8)
+    )
+
+    @model_validator(mode="after")
+    def _ensure_bounds(self) -> "BehaviorScrollConfig":
+        if self.max_depth_percent < self.min_depth_percent:
+            msg = "max_depth_percent должен быть не меньше min_depth_percent"
+            raise ValueError(msg)
+        if self.max_steps < self.min_steps:
+            msg = "max_steps должен быть не меньше min_steps"
+            raise ValueError(msg)
+        return self
+
+
+class BehaviorMouseConfig(BaseModel):
+    move_count_min: int = Field(default=1, ge=0)
+    move_count_max: int = Field(default=3, ge=0)
+    hover_probability: float = Field(default=0.35, ge=0.0, le=1.0)
+    hover_selectors: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _ensure_bounds(self) -> "BehaviorMouseConfig":
+        if self.move_count_max < self.move_count_min:
+            msg = "move_count_max должен быть не меньше move_count_min"
+            raise ValueError(msg)
+        return self
+
+
+class BehaviorNavigationConfig(BaseModel):
+    back_probability: float = Field(default=0.25, ge=0.0, le=1.0)
+    extra_products_probability: float = Field(default=0.3, ge=0.0, le=1.0)
+    extra_products_limit: int = Field(default=2, ge=0, le=5)
+    visit_root_probability: float = Field(default=0.15, ge=0.0, le=1.0)
+    max_additional_chain: int = Field(default=2, ge=0)
+
+
+class HumanBehaviorConfig(BaseModel):
+    enabled: bool = False
+    debug: bool = False
+    action_delay: DelayConfig = Field(default_factory=_default_behavior_action_delay)
+    scroll: BehaviorScrollConfig = Field(default_factory=BehaviorScrollConfig)
+    mouse: BehaviorMouseConfig = Field(default_factory=BehaviorMouseConfig)
+    navigation: BehaviorNavigationConfig = Field(default_factory=BehaviorNavigationConfig)
+
+
 class RuntimeConfig(BaseModel):
     """Общие лимиты выполнения."""
 
@@ -84,6 +143,7 @@ class RuntimeConfig(BaseModel):
     global_stop: GlobalStopConfig = Field(default_factory=GlobalStopConfig)
     page_delay: DelayConfig = Field(default_factory=_default_page_delay)
     product_delay: DelayConfig = Field(default_factory=_default_product_delay)
+    behavior: HumanBehaviorConfig = Field(default_factory=HumanBehaviorConfig)
 
 
 class DedupeConfig(BaseModel):
@@ -138,6 +198,10 @@ class SelectorConfig(BaseModel):
     price_without_discount_selector: str | None = None
     price_with_discount_selector: SelectorValue = None
     category_labels: dict[str, str] = Field(default_factory=dict)
+    hover_targets: list[str] = Field(
+        default_factory=list,
+        description="Селекторы элементов, на которые нужно имитировать наведение курсора (per-site)",
+    )
 
 
 class SiteLimits(BaseModel):

@@ -6,6 +6,7 @@
 - `app/cli.py` — Typer-CLI (`python -m app.main ...`).
 - `app/config` — pydantic-модели и загрузчик YAML/JSON конфигов.
 - `app/crawler` — движки обхода (httpx и Playwright), пагинация и дедуп.
+- `app/crawler/behavior.py` — поведенческий слой Playwright (скроллы, движения мыши, дополнительные переходы и логирование действий).
 - `app/state` — локальное SQLite-хранилище прогресса, синхронизируется с вкладкой `_state`.
 - `app/sheets` — OAuth2 + Google Sheets API (batchUpdate, вкладки `_runs`/`_state`).
 - `tests/` — pytest с моками (config/state/crawler/sheets).
@@ -18,9 +19,11 @@
    - `SITE_CONFIG_DIR` — путь внутри контейнера, куда будет примонтирован каталог с конфигами сайтов;
    - `WRITE_FLUSH_PRODUCT_INTERVAL` — через сколько товаров отправлять накопленный буфер в Google Sheets (по умолчанию 5, чтобы записи появлялись даже при прерывании запуска).
    - `PRODUCT_IMAGE_DIR` — каталог внутри контейнера, где будут храниться скачанные изображения товаров (смонтируйте volume).
+   - `NETWORK_ACCEPT_LANGUAGE` управляет Accept-Language/locale в Playwright-контекстах, `NETWORK_BROWSER_HEADLESS` позволяет включать визуальный режим Playwright (false — открыть окно Chromium), а блок переменных `BEHAVIOR_*` включает поведенческий слой (см. ниже).
 2. Сформируйте конфиги сайтов `config/sites/*.yml` (selectors, pagination, limits, wait/stop conditions, список `category_urls`) и примонтируйте каталог в `SITE_CONFIG_DIR`.
    - В блоке selectors можно указать `content_drop_after` — список CSS-селекторов, после которых (включая соответствующие элементы) текст товара не попадёт в `product_content`. Это полезно для удаления блоков отзывов/рекомендаций.
    - Для дополнительных полей предусмотрите селекторы: `name_en_selector`, `name_ru_selector`, `price_without_discount_selector`, `price_with_discount_selector`, а также словарь `category_labels` (ключ — slug из URL после `/items/`, значение — человекочитаемое название категории в таблице). Для `price_with_discount_selector` можно передать список селекторов — агент пойдёт по нему сверху вниз, пока не найдёт цену.
+   - Для поведенческого слоя можно указать `selectors.hover_targets` — список CSS-селекторов в категориях, куда следует плавно наводить курсор (перезаписывают глобальные настройки).
    - Троттлинг запросов задаётся через `.env`: `RUNTIME_PAGE_DELAY_MIN_SEC/RUNTIME_PAGE_DELAY_MAX_SEC` — паузы между страницами категорий, `RUNTIME_PRODUCT_DELAY_MIN_SEC/RUNTIME_PRODUCT_DELAY_MAX_SEC` — паузы между загрузками карточек. Значения указываются в секундах (можно дробные) и применяются с рандомным джиттером.
    - Если сайт блокирует headless-браузер без реальных cookies, экспортируйте `storage_state` из Playwright или браузера и задайте путь в переменной `NETWORK_BROWSER_STORAGE_STATE_PATH`. Самый быстрый способ — открыть сайт в Chrome, залогиниться, затем в DevTools → Application → Storage → Cookies выгрузить cookies в JSON и сконвертировать его в формат Playwright (`npx playwright codegen --save-storage auth.json` или `python -m playwright codegen ...`). Файл монтируем в контейнер и указываем абсолютный путь; Playwright загрузит его при старте и будет использовать ваши cookies/локальное хранилище.
 3. Если планируете браузерный движок локально, выполните `playwright install chromium`.
@@ -124,3 +127,8 @@ docker compose up parser
 ```
 
 Команда автоматически подхватит `.env` из корня и смонтирует нужные volume (`config/sites`, `state`, `assets/images`, `secrets`). Каталоги должны существовать заранее.
+## Поведенческий слой Playwright
+- Флаг `BEHAVIOR_ENABLED` включает "человеческое" поведение для всех сайтов, у которых `engine=browser`. Контролируются случайные прокрутки, движения мыши, hover по заданным селекторам, возвраты `back/forward`, переходы на главную и открытие дополнительных карточек в фоновом окне.
+- Диапазоны задержек (`BEHAVIOR_ACTION_DELAY_*`, `BEHAVIOR_SCROLL_*`, `BEHAVIOR_MOUSE_*`) задают "естественные" паузы и глубину прокрутки. Селекторы для hover задаются в конфиге сайта (`selectors.hover_targets`) — для каждого сайта можно указать свой список элементов. Для отладки можно выставить `NETWORK_BROWSER_HEADLESS=false`, тогда Playwright покажет реальное окно браузера.
+- Блок `BEHAVIOR_NAV_*` определяет вероятности и лимиты дополнительных переходов (сколько карточек можно открыть дополнительно, как часто делать `back`, ограничение цепочки). Переходы происходят в отдельных вкладках, основная страница категории остаётся доступной для парсинга.
+- При включённом `BEHAVIOR_DEBUG=true` логируются детальные действия слоя (URL, прокси, список выполненных активностей и потраченное время) — удобно для отладки антиботов. В обычном режиме сохраняется только краткая сводка.

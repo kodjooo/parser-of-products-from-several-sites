@@ -6,10 +6,14 @@ from typing import Iterable
 
 from app.config.errors import ConfigLoaderError
 from app.config.models import (
+    BehaviorMouseConfig,
+    BehaviorNavigationConfig,
+    BehaviorScrollConfig,
     DedupeConfig,
     DelayConfig,
     GlobalConfig,
     GlobalStopConfig,
+    HumanBehaviorConfig,
     NetworkConfig,
     RetryPolicy,
     RuntimeConfig,
@@ -43,8 +47,12 @@ def load_global_config_from_env() -> GlobalConfig:
             default_min=8.0,
             default_max=12.0,
         ),
+        behavior=_behavior_from_env(),
     )
 
+    headless_flag = _bool("NETWORK_BROWSER_HEADLESS", default=True)
+    if headless_flag is None:
+        headless_flag = True
     network = NetworkConfig(
         user_agents=_list_required("NETWORK_USER_AGENTS"),
         proxy_pool=_list("NETWORK_PROXY_POOL"),
@@ -57,6 +65,8 @@ def load_global_config_from_env() -> GlobalConfig:
             ),
         ),
         browser_storage_state_path=_path("NETWORK_BROWSER_STORAGE_STATE_PATH"),
+        accept_language=os.getenv("NETWORK_ACCEPT_LANGUAGE"),
+        browser_headless=headless_flag,
     )
 
     dedupe = DedupeConfig(
@@ -76,6 +86,91 @@ def load_global_config_from_env() -> GlobalConfig:
         network=network,
         dedupe=dedupe,
         state=state,
+    )
+
+
+def _behavior_from_env() -> HumanBehaviorConfig:
+    enabled = _bool("BEHAVIOR_ENABLED", default=False) or False
+    debug = _bool("BEHAVIOR_DEBUG", default=False) or False
+    action_delay = _delay_from_env(
+        prefix="BEHAVIOR_ACTION_DELAY",
+        default_min=0.3,
+        default_max=0.9,
+    )
+    scroll_probability = _float("BEHAVIOR_SCROLL_PROBABILITY")
+    if scroll_probability is None:
+        scroll_probability = 0.7
+    scroll_skip = _float("BEHAVIOR_SCROLL_SKIP_PROBABILITY")
+    if scroll_skip is None:
+        scroll_skip = 0.2
+    scroll_min_depth = _int("BEHAVIOR_SCROLL_MIN_DEPTH")
+    if scroll_min_depth is None:
+        scroll_min_depth = 25
+    scroll_max_depth = _int("BEHAVIOR_SCROLL_MAX_DEPTH")
+    if scroll_max_depth is None:
+        scroll_max_depth = 85
+    scroll_min_steps = _int("BEHAVIOR_SCROLL_MIN_STEPS")
+    if scroll_min_steps is None:
+        scroll_min_steps = 2
+    scroll_max_steps = _int("BEHAVIOR_SCROLL_MAX_STEPS")
+    if scroll_max_steps is None:
+        scroll_max_steps = 5
+    scroll = BehaviorScrollConfig(
+        probability=scroll_probability,
+        skip_probability=scroll_skip,
+        min_depth_percent=scroll_min_depth,
+        max_depth_percent=scroll_max_depth,
+        min_steps=scroll_min_steps,
+        max_steps=scroll_max_steps,
+        pause_between_steps=_delay_from_env(
+            prefix="BEHAVIOR_SCROLL_STEP_DELAY",
+            default_min=0.2,
+            default_max=0.8,
+        ),
+    )
+    move_min = _int("BEHAVIOR_MOUSE_MOVE_MIN")
+    if move_min is None:
+        move_min = 1
+    move_max = _int("BEHAVIOR_MOUSE_MOVE_MAX")
+    if move_max is None:
+        move_max = 3
+    hover_probability = _float("BEHAVIOR_MOUSE_HOVER_PROBABILITY")
+    if hover_probability is None:
+        hover_probability = 0.35
+    mouse = BehaviorMouseConfig(
+        move_count_min=move_min,
+        move_count_max=move_max,
+        hover_probability=hover_probability,
+    )
+    back_probability = _float("BEHAVIOR_NAV_BACK_PROBABILITY")
+    if back_probability is None:
+        back_probability = 0.25
+    extra_probability = _float("BEHAVIOR_NAV_EXTRA_PRODUCTS_PROBABILITY")
+    if extra_probability is None:
+        extra_probability = 0.3
+    extra_limit = _int("BEHAVIOR_NAV_EXTRA_PRODUCTS_LIMIT")
+    if extra_limit is None:
+        extra_limit = 2
+    visit_root_probability = _float("BEHAVIOR_NAV_VISIT_ROOT_PROBABILITY")
+    if visit_root_probability is None:
+        visit_root_probability = 0.15
+    max_chain = _int("BEHAVIOR_NAV_MAX_CHAIN")
+    if max_chain is None:
+        max_chain = 2
+    navigation = BehaviorNavigationConfig(
+        back_probability=back_probability,
+        extra_products_probability=extra_probability,
+        extra_products_limit=extra_limit,
+        visit_root_probability=visit_root_probability,
+        max_additional_chain=max_chain,
+    )
+    return HumanBehaviorConfig(
+        enabled=enabled,
+        debug=debug,
+        action_delay=action_delay,
+        scroll=scroll,
+        mouse=mouse,
+        navigation=navigation,
     )
 
 
@@ -155,3 +250,10 @@ def _path(name: str) -> Path | None:
     if not value:
         return None
     return Path(value)
+
+
+def _bool(name: str, default: bool | None = None) -> bool | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}

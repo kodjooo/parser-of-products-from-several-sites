@@ -8,7 +8,8 @@ from typing import Any, Iterable, Protocol
 
 import httpx
 
-from app.config.models import NetworkConfig, PaginationConfig, WaitCondition
+from app.config.models import HumanBehaviorConfig, NetworkConfig, PaginationConfig, WaitCondition
+from app.crawler.behavior import BehaviorContext, HumanBehaviorController
 from app.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,6 +21,7 @@ class EngineRequest:
     wait_conditions: Iterable[WaitCondition]
     pagination: PaginationConfig
     scroll_limit: int | None = None
+    behavior_context: BehaviorContext | None = None
 
 
 class CrawlerEngine(Protocol):
@@ -70,6 +72,8 @@ class HttpEngine:
             if condition.type == "delay":
                 time.sleep(float(condition.value))
         headers = {"User-Agent": random.choice(self.network.user_agents)}
+        if self.network.accept_language:
+            headers["Accept-Language"] = self.network.accept_language
         attempts = self.network.retry.max_attempts
         backoff = self.network.retry.backoff_sec
         for attempt in range(attempts):
@@ -100,7 +104,7 @@ class HttpEngine:
 class BrowserEngine:
     """Headless-браузер на базе Playwright (используется для динамики)."""
 
-    def __init__(self, network: NetworkConfig):
+    def __init__(self, network: NetworkConfig, behavior: HumanBehaviorConfig | None = None):
         try:
             from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
         except ImportError as exc:  # pragma: no cover - зависит от опциональной либы
@@ -113,7 +117,13 @@ class BrowserEngine:
         self._timeout_error = PlaywrightTimeoutError
         self._proxy_pool = ProxyPool(network.proxy_pool)
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=True)
+        if not network.browser_headless:
+            logger.warning("Playwright запущен в визуальном режиме (headless=False)")
+        self._browser = self._playwright.chromium.launch(headless=network.browser_headless)
+        self._behavior = HumanBehaviorController(
+            behavior,
+            default_timeout_sec=network.request_timeout_sec,
+        )
         storage_state_arg = None
         storage_path = network.browser_storage_state_path
         if storage_path:
@@ -153,6 +163,12 @@ class BrowserEngine:
                     self._perform_infinite_scroll(
                         page, request.scroll_limit or request.pagination.max_scrolls or 30
                     )
+                behavior_meta = {"url": request.url, "proxy": proxy}
+                self._behavior.apply(
+                    page,
+                    context=request.behavior_context,
+                    meta=behavior_meta,
+                )
                 html = page.content()
                 return html
             except ProxyBannedError:
@@ -226,11 +242,17 @@ class BrowserEngine:
         context = self._contexts.get(key)
         if context is None:
             proxy_arg = {"server": proxy} if proxy else None
-            context = self._browser.new_context(
-                user_agent=random.choice(self.network.user_agents),
-                storage_state=self._storage_state,
-                proxy=proxy_arg,
-            )
+            headers = self._build_default_headers()
+            context_kwargs: dict[str, Any] = {
+                "user_agent": random.choice(self.network.user_agents),
+                "storage_state": self._storage_state,
+                "proxy": proxy_arg,
+            }
+            if self.network.accept_language:
+                context_kwargs["locale"] = self.network.accept_language
+            if headers:
+                context_kwargs["extra_http_headers"] = headers
+            context = self._browser.new_context(**context_kwargs)
             self._contexts[key] = context
         return context
 
@@ -239,6 +261,11 @@ class BrowserEngine:
         context = self._contexts.pop(key, None)
         if context:
             context.close()
+
+    def _build_default_headers(self) -> dict[str, str]:
+        if not self.network.accept_language:
+            return {}
+        return {"Accept-Language": self.network.accept_language}
 
 
 class ProxyBannedError(Exception):
@@ -249,7 +276,11 @@ class ProxyExhaustedError(Exception):
     pass
 
 
-def create_engine(engine_type: str, network: NetworkConfig) -> CrawlerEngine:
+def create_engine(
+    engine_type: str,
+    network: NetworkConfig,
+    behavior: HumanBehaviorConfig | None = None,
+) -> CrawlerEngine:
     if engine_type == "browser":
-        return BrowserEngine(network)
+        return BrowserEngine(network, behavior=behavior)
     return HttpEngine(network)

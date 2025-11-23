@@ -54,9 +54,12 @@ class ProductContentFetcher:
         price_with_discount_selector: str | Sequence[str] | None = None,
     ) -> ProductContent:
         try:
+            headers = {"User-Agent": pick_user_agent(self.network)}
+            if self.network.accept_language:
+                headers["Accept-Language"] = self.network.accept_language
             response = self.client.get(
                 product_url,
-                headers={"User-Agent": pick_user_agent(self.network)},
+                headers=headers,
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
