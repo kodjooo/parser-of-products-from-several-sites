@@ -117,13 +117,29 @@ class BrowserEngine:
         self._timeout_error = PlaywrightTimeoutError
         self._proxy_pool = ProxyPool(network.proxy_pool)
         self._playwright = sync_playwright().start()
+        slow_mo_ms = int(network.browser_slow_mo_ms or 0)
         if not network.browser_headless:
             logger.warning("Playwright запущен в визуальном режиме (headless=False)")
-        self._browser = self._playwright.chromium.launch(headless=network.browser_headless)
+        if slow_mo_ms > 0:
+            logger.info("Playwright slow-mo активирован", extra={"slow_mo_ms": slow_mo_ms})
+        self._browser = self._playwright.chromium.launch(
+            headless=network.browser_headless,
+            slow_mo=slow_mo_ms or None,
+        )
         self._behavior = HumanBehaviorController(
             behavior,
             default_timeout_sec=network.request_timeout_sec,
+            extra_page_preview_sec=network.browser_extra_page_preview_sec,
         )
+        self._preview_delay_sec = max(0.0, float(network.browser_preview_delay_sec or 0.0))
+        self._preview_before_sec = max(
+            0.0, float(network.browser_preview_before_behavior_sec or 0.0)
+        )
+        if self._preview_delay_sec > 0:
+            logger.info(
+                "Режим визуального предпросмотра включён",
+                extra={"hold_sec": self._preview_delay_sec},
+            )
         storage_state_arg = None
         storage_path = network.browser_storage_state_path
         if storage_path:
@@ -163,6 +179,15 @@ class BrowserEngine:
                     self._perform_infinite_scroll(
                         page, request.scroll_limit or request.pagination.max_scrolls or 30
                     )
+                if self._preview_before_sec > 0:
+                    logger.debug(
+                        "Задержка перед поведенческим слоем для визуализации",
+                        extra={
+                            "url": request.url,
+                            "delay_sec": self._preview_before_sec,
+                        },
+                    )
+                    page.wait_for_timeout(self._preview_before_sec * 1000)
                 behavior_meta = {"url": request.url, "proxy": proxy}
                 self._behavior.apply(
                     page,
@@ -170,6 +195,15 @@ class BrowserEngine:
                     meta=behavior_meta,
                 )
                 html = page.content()
+                if self._preview_delay_sec > 0:
+                    logger.debug(
+                        "Пауза перед закрытием страницы для предпросмотра",
+                        extra={
+                            "url": request.url,
+                            "delay_sec": self._preview_delay_sec,
+                        },
+                    )
+                    page.wait_for_timeout(self._preview_delay_sec * 1000)
                 return html
             except ProxyBannedError:
                 logger.warning(

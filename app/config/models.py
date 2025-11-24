@@ -35,6 +35,10 @@ class NetworkConfig(BaseModel):
     browser_storage_state_path: Path | None = None
     accept_language: str | None = None
     browser_headless: bool = True
+    browser_preview_delay_sec: float = Field(default=0.0, ge=0.0)
+    browser_preview_before_behavior_sec: float = Field(default=0.0, ge=0.0)
+    browser_extra_page_preview_sec: float = Field(default=0.0, ge=0.0)
+    browser_slow_mo_ms: int = Field(default=0, ge=0)
 
     @field_validator("user_agents")
     @classmethod
@@ -144,6 +148,7 @@ class RuntimeConfig(BaseModel):
     page_delay: DelayConfig = Field(default_factory=_default_page_delay)
     product_delay: DelayConfig = Field(default_factory=_default_product_delay)
     behavior: HumanBehaviorConfig = Field(default_factory=HumanBehaviorConfig)
+    product_fetch_engine: Literal["http", "browser"] = Field(default="http")
 
 
 class DedupeConfig(BaseModel):

@@ -70,12 +70,17 @@ def test_load_global_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUNTIME_PAGE_DELAY_MAX_SEC", "9")
     monkeypatch.setenv("RUNTIME_PRODUCT_DELAY_MIN_SEC", "10")
     monkeypatch.setenv("RUNTIME_PRODUCT_DELAY_MAX_SEC", "14")
+    monkeypatch.setenv("PRODUCT_FETCH_ENGINE", "browser")
     monkeypatch.setenv("NETWORK_USER_AGENTS", "env-agent-1,env-agent-2")
     monkeypatch.setenv("NETWORK_REQUEST_TIMEOUT_SEC", "42")
     monkeypatch.setenv("NETWORK_RETRY_MAX_ATTEMPTS", "4")
     monkeypatch.setenv("NETWORK_RETRY_BACKOFF_SEC", "1,2,3")
     monkeypatch.setenv("NETWORK_BROWSER_STORAGE_STATE_PATH", "/tmp/auth.json")
     monkeypatch.setenv("NETWORK_BROWSER_HEADLESS", "false")
+    monkeypatch.setenv("NETWORK_BROWSER_PREVIEW_DELAY_SEC", "3.5")
+    monkeypatch.setenv("NETWORK_BROWSER_PREVIEW_BEFORE_BEHAVIOR_SEC", "2")
+    monkeypatch.setenv("NETWORK_BROWSER_EXTRA_PAGE_PREVIEW_SEC", "1.5")
+    monkeypatch.setenv("NETWORK_BROWSER_SLOW_MO_MS", "750")
     monkeypatch.setenv("NETWORK_ACCEPT_LANGUAGE", "ru-RU")
     monkeypatch.setenv("STATE_DATABASE_PATH", "/tmp/env-state.db")
     monkeypatch.setenv("BEHAVIOR_ENABLED", "true")
@@ -91,9 +96,14 @@ def test_load_global_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.runtime.page_delay.max_sec == 9
     assert config.runtime.product_delay.min_sec == 10
     assert config.runtime.product_delay.max_sec == 14
+    assert config.runtime.product_fetch_engine == "browser"
     assert str(config.network.browser_storage_state_path) == "/tmp/auth.json"
     assert config.network.accept_language == "ru-RU"
     assert config.network.browser_headless is False
+    assert config.network.browser_preview_delay_sec == 3.5
+    assert config.network.browser_preview_before_behavior_sec == 2.0
+    assert config.network.browser_extra_page_preview_sec == 1.5
+    assert config.network.browser_slow_mo_ms == 750
     assert config.runtime.behavior.enabled is True
     assert config.runtime.behavior.mouse.move_count_min == 2
     assert config.runtime.behavior.navigation.extra_products_limit == 1

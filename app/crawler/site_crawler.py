@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 from app.config.models import DelayConfig, SiteConfig
 from app.crawler.behavior import BehaviorContext
 from app.crawler.content_fetcher import ProductContentFetcher
-from app.crawler.engines import EngineRequest, create_engine
+from app.crawler.engines import BrowserEngine, EngineRequest, create_engine
 from app.crawler.models import CategoryMetrics, ProductRecord, SiteCrawlResult
 from app.crawler.utils import jitter_sleep, normalize_url
 from app.logger import get_logger
@@ -39,10 +39,22 @@ class SiteCrawler:
     ):
         self.context = context
         self.site = site
-        behavior_config = self._prepare_behavior_config(context.config.runtime.behavior)
-        self.engine = create_engine(site.engine, context.config.network, behavior_config)
+        self._behavior_config = self._prepare_behavior_config(context.config.runtime.behavior)
+        self.engine = create_engine(site.engine, context.config.network, self._behavior_config)
         assets_dir = context.assets_dir if context.assets_dir else Path("/app/assets/images")
-        self.content_fetcher = ProductContentFetcher(context.config.network, assets_dir)
+        shared_browser_engine = (
+            self.engine
+            if context.config.runtime.product_fetch_engine == "browser"
+            and isinstance(self.engine, BrowserEngine)
+            else None
+        )
+        self.content_fetcher = ProductContentFetcher(
+            context.config.network,
+            assets_dir,
+            fetch_engine=context.config.runtime.product_fetch_engine,
+            behavior_config=self._behavior_config,
+            shared_browser_engine=shared_browser_engine,
+        )
         self.dedupe_strip = context.config.dedupe.strip_params_blacklist
         self._seen_urls: set[str] = set()
         self.flush_products = max(1, flush_products) if flush_products else 0

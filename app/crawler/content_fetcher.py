@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
 
-from app.config.models import NetworkConfig
+from app.config.models import HumanBehaviorConfig, NetworkConfig, PaginationConfig
+from app.crawler.engines import BrowserEngine, EngineRequest
 from app.crawler.utils import pick_user_agent
 from app.media.image_saver import ImageSaver
 from app.logger import get_logger
@@ -29,16 +30,36 @@ class ProductContent:
 
 
 class ProductContentFetcher:
-    """Загружает страницу товара, извлекает текст и сохраняет главное изображение."""
+    """Загружает страницу товара (через HTTP или Playwright), извлекает текст и сохраняет изображение."""
 
-    def __init__(self, network: NetworkConfig, image_dir: Path):
+    def __init__(
+        self,
+        network: NetworkConfig,
+        image_dir: Path,
+        *,
+        fetch_engine: Literal["http", "browser"] = "http",
+        behavior_config: HumanBehaviorConfig | None = None,
+        shared_browser_engine: BrowserEngine | None = None,
+    ):
         self.network = network
         self.image_dir = image_dir
         self.image_dir.mkdir(parents=True, exist_ok=True)
-        self.client = httpx.Client(
-            timeout=network.request_timeout_sec,
-            follow_redirects=True,
-        )
+        self._mode = fetch_engine
+        self._http_client: httpx.Client | None = None
+        self._browser: BrowserEngine | None = None
+        self._owns_browser = False
+        if fetch_engine == "browser":
+            if shared_browser_engine is not None:
+                self._browser = shared_browser_engine
+                self._owns_browser = False
+            else:
+                self._browser = BrowserEngine(network, behavior=behavior_config)
+                self._owns_browser = True
+        else:
+            self._http_client = httpx.Client(
+                timeout=network.request_timeout_sec,
+                follow_redirects=True,
+            )
         self.image_saver = ImageSaver(network, image_dir)
 
     def fetch(
@@ -53,23 +74,12 @@ class ProductContentFetcher:
         price_without_discount_selector: str | None = None,
         price_with_discount_selector: str | Sequence[str] | None = None,
     ) -> ProductContent:
-        try:
-            headers = {"User-Agent": pick_user_agent(self.network)}
-            if self.network.accept_language:
-                headers["Accept-Language"] = self.network.accept_language
-            response = self.client.get(
-                product_url,
-                headers=headers,
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "Не удалось загрузить страницу товара",
-                extra={"url": product_url, "error": str(exc)},
-            )
+        if self._browser:
+            html = self._fetch_html_browser(product_url)
+        else:
+            html = self._fetch_html_http(product_url)
+        if not html:
             return ProductContent()
-
-        html = response.text
         soup = BeautifulSoup(html, "lxml")
         text_content = _extract_text_content(soup, drop_after_selectors)
         image_url = None
@@ -102,8 +112,49 @@ class ProductContentFetcher:
             price_with_discount=price_w,
         )
 
+    def _fetch_html_http(self, product_url: str) -> str | None:
+        if not self._http_client:
+            return None
+        try:
+            headers = {"User-Agent": pick_user_agent(self.network)}
+            if self.network.accept_language:
+                headers["Accept-Language"] = self.network.accept_language
+            response = self._http_client.get(
+                product_url,
+                headers=headers,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "Не удалось загрузить страницу товара",
+                extra={"url": product_url, "error": str(exc)},
+            )
+            return None
+        return response.text
+
+    def _fetch_html_browser(self, product_url: str) -> str | None:
+        if not self._browser:
+            return None
+        request = EngineRequest(
+            url=product_url,
+            wait_conditions=[],
+            pagination=PaginationConfig(mode="numbered_pages"),
+            behavior_context=None,
+        )
+        try:
+            return self._browser.fetch_html(request)
+        except Exception as exc:  # pragma: no cover - зависит от внешнего сайта
+            logger.warning(
+                "Не удалось загрузить страницу товара браузером",
+                extra={"url": product_url, "error": str(exc)},
+            )
+            return None
+
     def close(self) -> None:
-        self.client.close()
+        if self._http_client:
+            self._http_client.close()
+        if self._browser and self._owns_browser:
+            self._browser.shutdown()
         self.image_saver.close()
 
 

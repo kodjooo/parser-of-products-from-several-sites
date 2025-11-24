@@ -48,6 +48,7 @@ def load_global_config_from_env() -> GlobalConfig:
             default_max=12.0,
         ),
         behavior=_behavior_from_env(),
+        product_fetch_engine=_product_fetch_engine(),
     )
 
     headless_flag = _bool("NETWORK_BROWSER_HEADLESS", default=True)
@@ -67,6 +68,19 @@ def load_global_config_from_env() -> GlobalConfig:
         browser_storage_state_path=_path("NETWORK_BROWSER_STORAGE_STATE_PATH"),
         accept_language=os.getenv("NETWORK_ACCEPT_LANGUAGE"),
         browser_headless=headless_flag,
+        browser_preview_delay_sec=_float("NETWORK_BROWSER_PREVIEW_DELAY_SEC", default=0.0)
+        or 0.0,
+        browser_preview_before_behavior_sec=_float(
+            "NETWORK_BROWSER_PREVIEW_BEFORE_BEHAVIOR_SEC",
+            default=0.0,
+        )
+        or 0.0,
+        browser_extra_page_preview_sec=_float(
+            "NETWORK_BROWSER_EXTRA_PAGE_PREVIEW_SEC",
+            default=0.0,
+        )
+        or 0.0,
+        browser_slow_mo_ms=_int("NETWORK_BROWSER_SLOW_MO_MS", default=0) or 0,
     )
 
     dedupe = DedupeConfig(
@@ -172,6 +186,13 @@ def _behavior_from_env() -> HumanBehaviorConfig:
         mouse=mouse,
         navigation=navigation,
     )
+
+
+def _product_fetch_engine() -> str:
+    value = os.getenv("PRODUCT_FETCH_ENGINE", "http").strip().lower()
+    if value not in {"http", "browser"}:
+        raise ConfigLoaderError("PRODUCT_FETCH_ENGINE должен быть 'http' или 'browser'")
+    return value
 
 
 def _delay_from_env(*, prefix: str, default_min: float, default_max: float) -> DelayConfig:

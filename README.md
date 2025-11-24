@@ -12,20 +12,25 @@
 - `tests/` — pytest с моками (config/state/crawler/sheets).
 
 ## Подготовка окружения
-1. Отредактируйте `.env` (см. `.env.example`):
-   - блок Google (пути к JSON, токену и scopes); поддерживаются как desktop OAuth (с сохранением токена), так и service account JSON (тип `service_account`, токен не требуется);
-   - для сервисного аккаунта с делегированием доменных прав задайте `GOOGLE_OAUTH_IMPERSONATED_USER` — email пользователя Google Workspace, к которому есть доступ к таблице;
-   - блок `SHEET_*`, `RUNTIME_*`, `NETWORK_*`, `DEDUPE_*`, `STATE_*` — все рабочие параметры теперь задаются через `.env`;
-   - `SITE_CONFIG_DIR` — путь внутри контейнера, куда будет примонтирован каталог с конфигами сайтов;
-   - `WRITE_FLUSH_PRODUCT_INTERVAL` — через сколько товаров отправлять накопленный буфер в Google Sheets (по умолчанию 5, чтобы записи появлялись даже при прерывании запуска).
-   - `PRODUCT_IMAGE_DIR` — каталог внутри контейнера, где будут храниться скачанные изображения товаров (смонтируйте volume).
-   - `NETWORK_ACCEPT_LANGUAGE` управляет Accept-Language/locale в Playwright-контекстах, `NETWORK_BROWSER_HEADLESS` позволяет включать визуальный режим Playwright (false — открыть окно Chromium), а блок переменных `BEHAVIOR_*` включает поведенческий слой (см. ниже).
+   1. Отредактируйте `.env` (см. `.env.example`):
+       - блок Google (пути к JSON, токену и scopes); поддерживаются как desktop OAuth (с сохранением токена), так и service account JSON (тип `service_account`, токен не требуется);
+       - для сервисного аккаунта с делегированием доменных прав задайте `GOOGLE_OAUTH_IMPERSONATED_USER` — email пользователя Google Workspace, к которому есть доступ к таблице;
+       - блок `SHEET_*`, `RUNTIME_*`, `NETWORK_*`, `DEDUPE_*`, `STATE_*` — все рабочие параметры теперь задаются через `.env`;
+       - `LOG_LEVEL` — уровень логирования CLI (DEBUG/INFO/WARNING/ERROR/CRITICAL), удобно менять для отладки без правки `docker-compose.yml`;
+       - `SITE_CONFIG_DIR` — путь внутри контейнера, куда будет примонтирован каталог с конфигами сайтов;
+       - `WRITE_FLUSH_PRODUCT_INTERVAL` — через сколько товаров отправлять накопленный буфер в Google Sheets (по умолчанию 5, чтобы записи появлялись даже при прерывании запуска).
+       - `PRODUCT_FETCH_ENGINE` — какой движок использовать для загрузки карточек (`http` по умолчанию или `browser`, чтобы открывать каждую карточку в Playwright с поведенческим слоем).
+       - `PRODUCT_IMAGE_DIR` — каталог внутри контейнера, где будут храниться скачанные изображения товаров (смонтируйте volume).
+      - `NETWORK_ACCEPT_LANGUAGE` управляет Accept-Language/locale в Playwright-контекстах, `NETWORK_BROWSER_HEADLESS` позволяет включать визуальный режим Playwright (false — открыть окно Chromium), `NETWORK_BROWSER_SLOW_MO_MS` замедляет действия браузера (slow-mo Playwright), `NETWORK_BROWSER_PREVIEW_BEFORE_BEHAVIOR_SEC` даёт паузу перед стартом действий, `NETWORK_BROWSER_EXTRA_PAGE_PREVIEW_SEC` удерживает дополнительные вкладки, а `NETWORK_BROWSER_PREVIEW_DELAY_SEC` задаёт паузу перед закрытием основной вкладки (полезно, если нужно наблюдать действия браузера). Блок переменных `BEHAVIOR_*` включает поведенческий слой (см. ниже).
 2. Сформируйте конфиги сайтов `config/sites/*.yml` (selectors, pagination, limits, wait/stop conditions, список `category_urls`) и примонтируйте каталог в `SITE_CONFIG_DIR`.
    - В блоке selectors можно указать `content_drop_after` — список CSS-селекторов, после которых (включая соответствующие элементы) текст товара не попадёт в `product_content`. Это полезно для удаления блоков отзывов/рекомендаций.
    - Для дополнительных полей предусмотрите селекторы: `name_en_selector`, `name_ru_selector`, `price_without_discount_selector`, `price_with_discount_selector`, а также словарь `category_labels` (ключ — slug из URL после `/items/`, значение — человекочитаемое название категории в таблице). Для `price_with_discount_selector` можно передать список селекторов — агент пойдёт по нему сверху вниз, пока не найдёт цену.
    - Для поведенческого слоя можно указать `selectors.hover_targets` — список CSS-селекторов в категориях, куда следует плавно наводить курсор (перезаписывают глобальные настройки).
    - Троттлинг запросов задаётся через `.env`: `RUNTIME_PAGE_DELAY_MIN_SEC/RUNTIME_PAGE_DELAY_MAX_SEC` — паузы между страницами категорий, `RUNTIME_PRODUCT_DELAY_MIN_SEC/RUNTIME_PRODUCT_DELAY_MAX_SEC` — паузы между загрузками карточек. Значения указываются в секундах (можно дробные) и применяются с рандомным джиттером.
-   - Если сайт блокирует headless-браузер без реальных cookies, экспортируйте `storage_state` из Playwright или браузера и задайте путь в переменной `NETWORK_BROWSER_STORAGE_STATE_PATH`. Самый быстрый способ — открыть сайт в Chrome, залогиниться, затем в DevTools → Application → Storage → Cookies выгрузить cookies в JSON и сконвертировать его в формат Playwright (`npx playwright codegen --save-storage auth.json` или `python -m playwright codegen ...`). Файл монтируем в контейнер и указываем абсолютный путь; Playwright загрузит его при старте и будет использовать ваши cookies/локальное хранилище.
+   - Если сайт блокирует headless-браузер без реальных cookies, экспортируйте `storage_state` из Playwright или браузера и задайте путь в переменной `NETWORK_BROWSER_STORAGE_STATE_PATH`. Самый быстрый способ — открыть сайт в Chrome, залогиниться, затем в DevTools → Application → Storage → Cookies выгрузить cookies в JSON и сконвертировать его в формат Playwright (`npx playwright codegen --save-storage auth.json` или `python -m playwright codegen ...`). Типовой сценарий:
+     1. Выполните `npx playwright codegen https://example.com --save-storage auth.json` (или `python -m playwright codegen ...`) и завершите сессию после авторизации на целевом сайте.
+     2. Проверьте, что `auth.json` появился в каталоге, доступном для контейнера (например, `./secrets/auth.json`) и задайте этот путь в `.env` (`NETWORK_BROWSER_STORAGE_STATE_PATH=/secrets/auth.json`).
+     3. Смонтируйте каталог с файлом в контейнер (`-v $(pwd)/secrets:/secrets`). Playwright при запуске загрузит указанное состояние и будет использовать те же cookies/localStorage.
 3. Если планируете браузерный движок локально, выполните `playwright install chromium`.
 
 ## Сборка и запуск в Docker

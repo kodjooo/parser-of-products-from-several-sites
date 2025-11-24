@@ -32,11 +32,18 @@ class BehaviorResult:
 class HumanBehaviorController:
     """Имитация поведения пользователя поверх Playwright."""
 
-    def __init__(self, config: HumanBehaviorConfig | None, default_timeout_sec: float):
+    def __init__(
+        self,
+        config: HumanBehaviorConfig | None,
+        default_timeout_sec: float,
+        *,
+        extra_page_preview_sec: float = 0.0,
+    ):
         self.config = config or HumanBehaviorConfig()
         self.enabled = bool(self.config.enabled)
         self.debug = bool(self.config.debug)
         self._timeout_sec = default_timeout_sec
+        self._extra_page_preview_sec = max(0.0, float(extra_page_preview_sec or 0.0))
 
     def apply(
         self,
@@ -225,6 +232,7 @@ class HumanBehaviorController:
             absolute = urljoin(base_url, href)
             if not absolute:
                 continue
+            self._scroll_to_node(page, node)
             opened = self._open_in_new_page(page, absolute)
             if opened:
                 actions.append(f"extra_product:{absolute}")
@@ -279,6 +287,8 @@ class HumanBehaviorController:
         try:
             extra_page.set_default_timeout(self._timeout_sec * 1000)
             extra_page.goto(url, wait_until="domcontentloaded")
+            if self._extra_page_preview_sec > 0:
+                extra_page.wait_for_timeout(self._extra_page_preview_sec * 1000)
             success = True
         except Exception as exc:  # pragma: no cover
             logger.debug("Не удалось открыть дополнительную страницу", extra={"url": url, "error": str(exc)})
@@ -288,6 +298,18 @@ class HumanBehaviorController:
             except Exception:  # pragma: no cover
                 pass
         return success
+
+    def _scroll_to_node(self, page: Any, node: Any) -> None:
+        if not hasattr(page, "evaluate") or node is None:
+            return
+        try:
+            page.evaluate(
+                "(element) => element.scrollIntoView({behavior: 'smooth', block: 'center', inline: 'center'});",
+                node,
+            )
+            self._wait(self.config.action_delay)
+        except Exception as exc:  # pragma: no cover
+            logger.debug("Не удалось плавно проскроллить к элементу", extra={"error": str(exc)})
 
     def _wait(self, delay: Any) -> None:
         if hasattr(delay, "min_sec") and hasattr(delay, "max_sec"):
