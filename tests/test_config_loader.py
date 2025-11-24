@@ -75,6 +75,7 @@ def test_load_global_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NETWORK_REQUEST_TIMEOUT_SEC", "42")
     monkeypatch.setenv("NETWORK_RETRY_MAX_ATTEMPTS", "4")
     monkeypatch.setenv("NETWORK_RETRY_BACKOFF_SEC", "1,2,3")
+    monkeypatch.setenv("NETWORK_PROXY_ALLOW_DIRECT", "true")
     monkeypatch.setenv("NETWORK_BROWSER_STORAGE_STATE_PATH", "/tmp/auth.json")
     monkeypatch.setenv("NETWORK_BROWSER_HEADLESS", "false")
     monkeypatch.setenv("NETWORK_BROWSER_PREVIEW_DELAY_SEC", "3.5")
@@ -100,6 +101,7 @@ def test_load_global_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert str(config.network.browser_storage_state_path) == "/tmp/auth.json"
     assert config.network.accept_language == "ru-RU"
     assert config.network.browser_headless is False
+    assert config.network.proxy_allow_direct is True
     assert config.network.browser_preview_delay_sec == 3.5
     assert config.network.browser_preview_before_behavior_sec == 2.0
     assert config.network.browser_extra_page_preview_sec == 1.5

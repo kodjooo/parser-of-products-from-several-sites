@@ -201,6 +201,24 @@ class SiteCrawler:
             root_url=root_url,
         )
 
+    def _build_product_behavior_context(self, product_url: str) -> BehaviorContext | None:
+        behavior = self.context.config.runtime.behavior
+        if not behavior.enabled:
+            return None
+        product_hover = self.site.selectors.product_hover_targets
+        if product_hover is None:
+            return None
+        root_url = self.site.base_url
+        if not root_url:
+            parsed = urlparse(product_url)
+            root_url = f"{parsed.scheme}://{parsed.netloc}"
+        return BehaviorContext(
+            hover_selectors=list(product_hover) if product_hover else [],
+            category_url=product_url,
+            base_url=self.site.base_url or product_url,
+            root_url=root_url,
+        )
+
     def _process_html(
         self,
         html: str,
@@ -243,11 +261,12 @@ class SiteCrawler:
                 normalized,
                 image_selector=self.site.selectors.main_image_selector,
                 drop_after_selectors=self.site.selectors.content_drop_after,
-                download_image=False,
+                download_image=True,
                 name_en_selector=self.site.selectors.name_en_selector,
                 name_ru_selector=self.site.selectors.name_ru_selector,
                 price_without_discount_selector=self.site.selectors.price_without_discount_selector,
                 price_with_discount_selector=self.site.selectors.price_with_discount_selector,
+                behavior_context=self._build_product_behavior_context(normalized),
             )
             record.content_text = content.text_content
             record.image_url = content.image_url

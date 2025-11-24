@@ -43,7 +43,9 @@ def run_agent(
     log_level: str = typer.Option(
         "INFO",
         "--log-level",
-        help="Уровень логирования (DEBUG/INFO/WARNING/ERROR/CRITICAL).",
+        envvar="LOG_LEVEL",
+        help="Уровень логирования (DEBUG/INFO/WARNING/ERROR/CRITICAL). "
+        "Можно задать через переменную окружения LOG_LEVEL.",
     ),
     resume: bool = typer.Option(
         True,

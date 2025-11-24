@@ -66,9 +66,9 @@ class AgentRunner:
         flush_products_env = os.getenv("WRITE_FLUSH_PRODUCT_INTERVAL")
         if not flush_products_env:
             flush_products_env = os.getenv("WRITE_FLUSH_PAGE_INTERVAL")
-        flush_products = int(flush_products_env or "5")
+        flush_products = int(flush_products_env or "1")
         if flush_products < 1:
-            flush_products = 5
+            flush_products = 1
 
         context = RuntimeContext(
             run_id=run_id,

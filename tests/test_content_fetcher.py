@@ -3,6 +3,7 @@ from __future__ import annotations
 from bs4 import BeautifulSoup
 
 from app.crawler.content_fetcher import (
+    _extract_image_from_node,
     _extract_main_image_url,
     _extract_text_content,
     _extract_text_by_selector,
@@ -47,4 +48,17 @@ def test_extract_main_image_prefers_highest_descriptor():
     """
     soup = BeautifulSoup(html, "lxml")
     url = _extract_main_image_url(soup, "https://example.com/product")
+    assert url == "https://example.com/a-2x.webp"
+
+
+def test_extract_image_from_node_understands_picture_sources():
+    html = """
+    <picture class="image">
+        <source srcset="https://example.com/a-1x.webp 1x, https://example.com/a-2x.webp 2x">
+        <img data-nuxt-img="https://example.com/a-1x.webp"/>
+    </picture>
+    """
+    soup = BeautifulSoup(html, "lxml")
+    node = soup.select_one("picture.image")
+    url = _extract_image_from_node(node, "https://example.com/product")
     assert url == "https://example.com/a-2x.webp"

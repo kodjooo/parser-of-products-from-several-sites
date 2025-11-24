@@ -32,6 +32,9 @@ selectors:
     # Liquor: "ликёры"
   hover_targets:
     - "div.ws-products div.m-catalog-item--list a.m-catalog-item__image"
+  product_hover_targets:
+    - "div.m-productpage-price button.button"
+    - "div.o-productpage-details__characteristics div.underline"
 
 
 pagination:

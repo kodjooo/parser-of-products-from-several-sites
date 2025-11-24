@@ -21,6 +21,7 @@ class BehaviorContext:
     category_url: str | None = None
     base_url: str | None = None
     root_url: str | None = None
+    hover_selectors: list[str] | None = None
 
 
 @dataclass(slots=True)
@@ -67,7 +68,7 @@ class HumanBehaviorController:
         try:
             actions.extend(self._maybe_scroll(page))
             actions.extend(self._maybe_move_mouse(page))
-            actions.extend(self._maybe_hover(page))
+            actions.extend(self._maybe_hover(page, context))
             nav_actions = self._maybe_back_and_forward(page, remaining_nav)
             actions.extend(nav_actions)
             remaining_nav = _decrease_remaining(remaining_nav, len(nav_actions))
@@ -111,15 +112,18 @@ class HumanBehaviorController:
             current = min(100, current + increment + random.uniform(-5, 5))
             fraction = max(0.0, min(1.0, current / 100))
             try:
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight * arguments[0]);", fraction)
+                page.evaluate(
+                    "(fraction) => window.scrollTo(0, document.body.scrollHeight * fraction);",
+                    fraction,
+                )
             except Exception as exc:  # pragma: no cover - зависит от браузера
-                logger.debug("Не удалось выполнить скролл", extra={"error": str(exc)})
+                logger.debug("Не удалось выполнить скролл fraction=%s error=%s", fraction, exc)
                 break
             actions.append(f"scroll:{int(fraction * 100)}")
             self._wait(self.config.scroll.pause_between_steps)
         if random.random() < 0.15:
             try:
-                page.evaluate("window.scrollTo(0, 0);")
+                page.evaluate("() => window.scrollTo(0, 0);")
                 actions.append("scroll:back-to-top")
             except Exception:  # pragma: no cover - зависит от браузера
                 pass
@@ -147,15 +151,20 @@ class HumanBehaviorController:
             self._wait(self.config.action_delay)
         return actions
 
-    def _maybe_hover(self, page: Any) -> list[str]:
-        if not self.config.mouse.hover_selectors:
+    def _maybe_hover(self, page: Any, context: BehaviorContext | None) -> list[str]:
+        selectors_source: list[str] | None
+        if context is not None and context.hover_selectors is not None:
+            selectors_source = context.hover_selectors
+        else:
+            selectors_source = self.config.mouse.hover_selectors
+        if not selectors_source:
             return []
         if random.random() > self.config.mouse.hover_probability:
             return []
         if not hasattr(page, "query_selector_all"):
             return []
         actions: list[str] = []
-        selectors = [selector for selector in self.config.mouse.hover_selectors if selector]
+        selectors = [selector for selector in selectors_source if selector]
         random.shuffle(selectors)
         for selector in selectors:
             try:

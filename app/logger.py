@@ -12,17 +12,17 @@ _configured = False
 def configure_logging(level: LogLevel = "INFO") -> None:
     """Настраивает цветной логгер один раз за запуск."""
     global _configured
-    if _configured:
-        return
-
-    console = Console()
-    logging.basicConfig(
-        level=level,
-        format="%(message)s",
-        datefmt="[%X]",
-        handlers=[RichHandler(console=console, show_path=False, markup=True)],
-    )
-    _configured = True
+    if not _configured:
+        console = Console()
+        logging.basicConfig(
+            level=level,
+            format="%(message)s",
+            datefmt="[%X]",
+            handlers=[RichHandler(console=console, show_path=False, markup=True)],
+        )
+        _configured = True
+    else:
+        logging.getLogger().setLevel(level)
 
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:

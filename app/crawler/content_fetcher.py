@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence
 from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
 
 from app.config.models import HumanBehaviorConfig, NetworkConfig, PaginationConfig
-from app.crawler.engines import BrowserEngine, EngineRequest
+from app.crawler.behavior import BehaviorContext
+from app.crawler.engines import BrowserEngine, EngineRequest, ProxyPool, ProxyExhaustedError
 from app.crawler.utils import pick_user_agent
 from app.media.image_saver import ImageSaver
 from app.logger import get_logger
@@ -48,6 +49,7 @@ class ProductContentFetcher:
         self._http_client: httpx.Client | None = None
         self._browser: BrowserEngine | None = None
         self._owns_browser = False
+        self._proxy_pool = ProxyPool(network.proxy_pool, allow_direct=network.proxy_allow_direct)
         if fetch_engine == "browser":
             if shared_browser_engine is not None:
                 self._browser = shared_browser_engine
@@ -60,7 +62,7 @@ class ProductContentFetcher:
                 timeout=network.request_timeout_sec,
                 follow_redirects=True,
             )
-        self.image_saver = ImageSaver(network, image_dir)
+        self.image_saver = ImageSaver(network, image_dir, proxy_pool=self._proxy_pool)
 
     def fetch(
         self,
@@ -73,11 +75,14 @@ class ProductContentFetcher:
         name_ru_selector: str | None = None,
         price_without_discount_selector: str | None = None,
         price_with_discount_selector: str | Sequence[str] | None = None,
+        behavior_context: BehaviorContext | None = None,
     ) -> ProductContent:
+        proxy_used: str | None = None
         if self._browser:
-            html = self._fetch_html_browser(product_url)
+            html = self._fetch_html_browser(product_url, behavior_context)
+            proxy_used = getattr(self._browser, "last_proxy", None)
         else:
-            html = self._fetch_html_http(product_url)
+            html, proxy_used = self._fetch_html_http(product_url)
         if not html:
             return ProductContent()
         soup = BeautifulSoup(html, "lxml")
@@ -86,9 +91,7 @@ class ProductContentFetcher:
         if image_selector:
             node = soup.select_one(image_selector)
             if node:
-                src = node.get("src") or node.get("data-src")
-                if src:
-                    image_url = urljoin(product_url, src)
+                image_url = _extract_image_from_node(node, product_url)
         if not image_url:
             image_url = _extract_main_image_url(soup, product_url)
         title = _extract_title(soup)
@@ -99,7 +102,24 @@ class ProductContentFetcher:
 
         image_path = None
         if download_image and image_url:
-            image_path = self.image_saver.save(image_url, title or "product", product_url)
+            if self._browser:
+                try:
+                    content_bytes, content_type = self._browser.fetch_binary(image_url, proxy_used)
+                    image_path = self.image_saver.save_from_content(
+                        image_url,
+                        title or "product",
+                        product_url,
+                        content_bytes,
+                        content_type,
+                    )
+                except Exception as exc:  # pragma: no cover - зависит от сети
+                    logger.warning(
+                        "Не удалось скачать изображение через браузер, fallback на HTTP",
+                        extra={"url": image_url, "error": str(exc)},
+                    )
+                    image_path = self.image_saver.save(image_url, title or "product", product_url, proxy=proxy_used)
+            else:
+                image_path = self.image_saver.save(image_url, title or "product", product_url, proxy=proxy_used)
 
         return ProductContent(
             text_content=text_content,
@@ -112,34 +132,44 @@ class ProductContentFetcher:
             price_with_discount=price_w,
         )
 
-    def _fetch_html_http(self, product_url: str) -> str | None:
+    def _fetch_html_http(self, product_url: str) -> tuple[str | None, str | None]:
         if not self._http_client:
-            return None
+            return None, None
         try:
-            headers = {"User-Agent": pick_user_agent(self.network)}
+            ua = pick_user_agent(self.network)
+            headers = {"User-Agent": ua}
             if self.network.accept_language:
                 headers["Accept-Language"] = self.network.accept_language
+            try:
+                proxy = self._proxy_pool.pick()
+            except ProxyExhaustedError:
+                logger.error("Прокси-пул исчерпан для HTTP-загрузки", extra={"url": product_url})
+                return None, None
             response = self._http_client.get(
                 product_url,
                 headers=headers,
+                proxy=proxy,
             )
             response.raise_for_status()
+            logger.debug("HTTP fetch product url=%s proxy=%s ua=%s", product_url, proxy, ua)
         except httpx.HTTPError as exc:
             logger.warning(
                 "Не удалось загрузить страницу товара",
                 extra={"url": product_url, "error": str(exc)},
             )
-            return None
-        return response.text
+            return None, proxy
+        return response.text, proxy
 
-    def _fetch_html_browser(self, product_url: str) -> str | None:
+    def _fetch_html_browser(
+        self, product_url: str, behavior_context: BehaviorContext | None
+    ) -> str | None:
         if not self._browser:
             return None
         request = EngineRequest(
             url=product_url,
             wait_conditions=[],
             pagination=PaginationConfig(mode="numbered_pages"),
-            behavior_context=None,
+            behavior_context=behavior_context,
         )
         try:
             return self._browser.fetch_html(request)
@@ -213,6 +243,24 @@ def _extract_title(soup: BeautifulSoup) -> str | None:
     return None
 
 
+def _extract_image_from_node(node: Any, base_url: str) -> str | None:
+    srcset = node.get("srcset") or node.get("data-srcset")
+    if srcset:
+        return _pick_best_srcset(srcset, base_url)
+    src = node.get("src") or node.get("data-src") or node.get("data-nuxt-img")
+    if src:
+        return urljoin(base_url, src)
+    # check nested <source> elements (picture tag)
+    if hasattr(node, "find_all"):
+        for child in node.find_all("source"):
+            source_srcset = child.get("srcset") or child.get("data-srcset")
+            if source_srcset:
+                url = _pick_best_srcset(source_srcset, base_url)
+                if url:
+                    return url
+    return None
+
+
 def _extract_main_image_url(soup: BeautifulSoup, base_url: str) -> str | None:
     # 1) og:image
     meta_og = soup.find("meta", attrs={"property": "og:image"})
@@ -225,47 +273,43 @@ def _extract_main_image_url(soup: BeautifulSoup, base_url: str) -> str | None:
         if node:
             return urljoin(base_url, node.get(attr))
 
-    # 3) srcset с максимальным дескриптором
+    # 3) srcset с максимальным дескриптором / fallback на обычный src
     for img in soup.find_all("img"):
-        srcset = img.get("srcset")
-        if srcset:
-            candidates = [
-                part.strip().split(" ")
-                for part in srcset.split(",")
-                if part.strip()
-            ]
-            best_url = None
-            best_priority = -1
-            best_score = -1.0
-            for candidate in candidates:
-                url_part = candidate[0]
-                descriptor = candidate[1] if len(candidate) > 1 else ""
-                priority = 0
-                score = 0.0
-                if descriptor.endswith("w"):
-                    priority = 2
-                    try:
-                        score = float(descriptor[:-1])
-                    except ValueError:
-                        score = 0.0
-                elif descriptor.endswith("x"):
-                    priority = 1
-                    try:
-                        score = float(descriptor[:-1])
-                    except ValueError:
-                        score = 0.0
-                if best_url is None or priority > best_priority or (
-                    priority == best_priority and score > best_score
-                ):
-                    best_url = url_part
-                    best_priority = priority
-                    best_score = score
-            if best_url:
-                return urljoin(base_url, best_url)
-
-    # 4) первый img с src
-    img = soup.find("img", src=True)
-    if img:
-        return urljoin(base_url, img["src"])
+        url = _extract_image_from_node(img, base_url)
+        if url:
+            return url
 
     return None
+
+
+def _pick_best_srcset(srcset: str, base_url: str) -> str | None:
+    candidates = [
+        part.strip().split(" ")
+        for part in srcset.split(",")
+        if part.strip()
+    ]
+    best_url = None
+    best_priority = -1
+    best_score = -1.0
+    for candidate in candidates:
+        url_part = candidate[0]
+        descriptor = candidate[1] if len(candidate) > 1 else ""
+        priority = 0
+        score = 0.0
+        if descriptor.endswith("w"):
+            priority = 2
+            try:
+                score = float(descriptor[:-1])
+            except ValueError:
+                score = 0.0
+        elif descriptor.endswith("x"):
+            priority = 1
+            try:
+                score = float(descriptor[:-1])
+            except ValueError:
+                score = 0.0
+        if priority > best_priority or (priority == best_priority and score > best_score):
+            best_priority = priority
+            best_score = score
+            best_url = urljoin(base_url, url_part)
+    return best_url

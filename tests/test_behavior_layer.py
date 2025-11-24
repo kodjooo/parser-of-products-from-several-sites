@@ -177,3 +177,41 @@ def test_behavior_controller_additional_products() -> None:
     assert page.context.created_pages
     opened = page.context.created_pages[0].opened[0]
     assert opened.startswith("https://demo.example/p/")
+
+
+def test_behavior_hover_uses_context_selectors() -> None:
+    config = HumanBehaviorConfig(
+        enabled=True,
+        debug=False,
+        action_delay=_zero_delay(),
+        scroll=BehaviorScrollConfig(
+            probability=0.0,
+            skip_probability=1.0,
+            min_depth_percent=10,
+            max_depth_percent=10,
+            min_steps=1,
+            max_steps=1,
+            pause_between_steps=_zero_delay(),
+        ),
+        mouse=BehaviorMouseConfig(
+            move_count_min=0,
+            move_count_max=0,
+            hover_probability=1.0,
+            hover_selectors=[".default-selector"],
+        ),
+        navigation=BehaviorNavigationConfig(
+            back_probability=0.0,
+            extra_products_probability=0.0,
+            extra_products_limit=0,
+            visit_root_probability=0.0,
+            max_additional_chain=0,
+        ),
+    )
+    controller = HumanBehaviorController(config, default_timeout_sec=5.0)
+    page = _StubPage()
+    page.set_nodes(".product-hover", [_StubElement("/noop")])
+    context = BehaviorContext(hover_selectors=[".product-hover"])
+
+    result = controller.apply(page, context=context, meta={"url": "https://demo.example/product"})
+
+    assert any(action.startswith("hover:.product-hover") for action in result.actions)

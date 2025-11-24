@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config.models import NetworkConfig
+from app.crawler.engines import ProxyPool, ProxyExhaustedError
 from app.crawler.utils import pick_user_agent
 from app.logger import get_logger
 
@@ -17,7 +18,7 @@ logger = get_logger(__name__)
 class ImageSaver:
     """Отвечает за сохранение изображений товаров в локальную директорию."""
 
-    def __init__(self, network: NetworkConfig, image_dir: Path):
+    def __init__(self, network: NetworkConfig, image_dir: Path, proxy_pool: ProxyPool | None = None):
         self.network = network
         self.image_dir = image_dir
         self.image_dir.mkdir(parents=True, exist_ok=True)
@@ -25,16 +26,26 @@ class ImageSaver:
             timeout=network.request_timeout_sec,
             follow_redirects=True,
         )
+        self._proxy_pool = proxy_pool
 
-    def save(self, url: str, title: str | None, fallback_id: str) -> str | None:
+    def save(self, url: str, title: str | None, fallback_id: str, proxy: str | None = None) -> str | None:
         if not url:
             return None
         try:
+            proxy_to_use = proxy
+            if proxy_to_use is None and self._proxy_pool:
+                try:
+                    proxy_to_use = self._proxy_pool.pick()
+                except ProxyExhaustedError:
+                    logger.error("Прокси-пул исчерпан для загрузки изображения", extra={"url": url})
+                    proxy_to_use = None
             response = self.client.get(
                 url,
                 headers={"User-Agent": pick_user_agent(self.network)},
+                proxy=proxy_to_use,
             )
             response.raise_for_status()
+            logger.debug("Image download via httpx url=%s proxy=%s", url, proxy_to_use)
         except httpx.HTTPError as exc:
             logger.warning(
                 "Не удалось скачать изображение",
@@ -42,7 +53,46 @@ class ImageSaver:
             )
             return None
 
-        extension = _guess_extension(url, response.headers.get("content-type"))
+        return self._write_file(
+            url=url,
+            title=title,
+            fallback_id=fallback_id,
+            content=response.content,
+            content_type=response.headers.get("content-type"),
+        )
+
+    def save_from_content(
+        self,
+        url: str,
+        title: str | None,
+        fallback_id: str,
+        content: bytes,
+        content_type: str | None = None,
+    ) -> str | None:
+        if not content:
+            return None
+        logger.debug("Image download via Playwright url=%s", url)
+        return self._write_file(
+            url=url,
+            title=title,
+            fallback_id=fallback_id,
+            content=content,
+            content_type=content_type,
+        )
+
+    def close(self) -> None:
+        self.client.close()
+
+    def _write_file(
+        self,
+        *,
+        url: str,
+        title: str | None,
+        fallback_id: str,
+        content: bytes,
+        content_type: str | None,
+    ) -> str | None:
+        extension = _guess_extension(url, content_type)
         slug_source = title or "product"
         slug = _slugify(slug_source) or hashlib.md5(fallback_id.encode(), usedforsecurity=False).hexdigest()
         filename = f"{slug}.{extension}"
@@ -52,13 +102,9 @@ class ImageSaver:
             suffix = hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()[:6]
             path = self.image_dir / f"{slug}-{suffix}.{extension}"
 
-        path.write_bytes(response.content)
+        path.write_bytes(content)
         logger.info("Сохранено изображение товара", extra={"path": str(path)})
         return str(path)
-
-    def close(self) -> None:
-        self.client.close()
-
 
 def _guess_extension(url: str, content_type: str | None) -> str:
     if content_type:

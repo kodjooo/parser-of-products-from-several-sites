@@ -30,6 +30,7 @@ class NetworkConfig(BaseModel):
 
     user_agents: list[str]
     proxy_pool: list[str] = Field(default_factory=list)
+    proxy_allow_direct: bool = False
     request_timeout_sec: float = Field(default=30, gt=0)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
     browser_storage_state_path: Path | None = None
@@ -206,6 +207,10 @@ class SelectorConfig(BaseModel):
     hover_targets: list[str] = Field(
         default_factory=list,
         description="Селекторы элементов, на которые нужно имитировать наведение курсора (per-site)",
+    )
+    product_hover_targets: list[str] | None = Field(
+        default=None,
+        description="Селекторы для hover на карточках товаров (если нужно отличать от категорий)",
     )
 
 

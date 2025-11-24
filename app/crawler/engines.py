@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable, Protocol
 
 import httpx
+from urllib.parse import urlsplit
 
 from app.config.models import HumanBehaviorConfig, NetworkConfig, PaginationConfig, WaitCondition
 from app.crawler.behavior import BehaviorContext, HumanBehaviorController
@@ -31,18 +32,21 @@ class CrawlerEngine(Protocol):
 
 
 class ProxyPool:
-    def __init__(self, proxies: list[str], override: str | None = None):
+    def __init__(self, proxies: list[str], override: str | None = None, allow_direct: bool = False):
         self.override = override
         self._proxies = proxies or []
         self._bad: set[str] = set()
         self._has_pool = bool(self._proxies)
+        self._allow_direct = allow_direct
 
     def pick(self) -> str | None:
         if self.override:
             return self.override
-        if not self._has_pool:
+        if not self._has_pool and not self._allow_direct:
             return None
         candidates = [proxy for proxy in self._proxies if proxy not in self._bad]
+        if self._allow_direct:
+            candidates.append(None)
         if not candidates:
             raise ProxyExhaustedError("Все прокси из пула помечены как недоступные")
         return random.choice(candidates)
@@ -57,7 +61,7 @@ class HttpEngine:
 
     def __init__(self, network: NetworkConfig, proxy_override: str | None = None):
         self.network = network
-        self._proxy_pool = ProxyPool(network.proxy_pool, proxy_override)
+        self._proxy_pool = ProxyPool(network.proxy_pool, proxy_override, allow_direct=network.proxy_allow_direct)
         self.timeout = network.request_timeout_sec
         self.client = httpx.Client(
             timeout=self.timeout,
@@ -115,7 +119,7 @@ class BrowserEngine:
 
         self.network = network
         self._timeout_error = PlaywrightTimeoutError
-        self._proxy_pool = ProxyPool(network.proxy_pool)
+        self._proxy_pool = ProxyPool(network.proxy_pool, allow_direct=network.proxy_allow_direct)
         self._playwright = sync_playwright().start()
         slow_mo_ms = int(network.browser_slow_mo_ms or 0)
         if not network.browser_headless:
@@ -157,6 +161,7 @@ class BrowserEngine:
                 )
         self._storage_state = storage_state_arg
         self._contexts: dict[str | None, Any] = {}
+        self._last_proxy: str | None = None
 
     def fetch_html(self, request: EngineRequest) -> str:
         attempts = max(1, self.network.retry.max_attempts)
@@ -171,6 +176,14 @@ class BrowserEngine:
             page = context.new_page()
             try:
                 page.set_default_timeout(self.network.request_timeout_sec * 1000)
+                logger.debug(
+                    "Page navigation url=%s proxy=%s user_agent=%s cookies_loaded=%s headers=%s",
+                    request.url,
+                    proxy,
+                    context._options.get("user_agent") if hasattr(context, "_options") else None,  # type: ignore[attr-defined]
+                    bool(self._storage_state),
+                    self._build_default_headers(),
+                )
                 response = page.goto(request.url, wait_until="domcontentloaded")
                 if response and response.status == 403:
                     raise ProxyBannedError
@@ -195,6 +208,7 @@ class BrowserEngine:
                     meta=behavior_meta,
                 )
                 html = page.content()
+                self._last_proxy = proxy
                 if self._preview_delay_sec > 0:
                     logger.debug(
                         "Пауза перед закрытием страницы для предпросмотра",
@@ -230,6 +244,15 @@ class BrowserEngine:
             finally:
                 page.close()
         raise RuntimeError(f"Не удалось загрузить {request.url}")
+
+    def fetch_binary(self, url: str, proxy: str | None = None) -> tuple[bytes, str | None]:
+        context = self._get_or_create_context(proxy)
+        timeout_ms = int(self.network.request_timeout_sec * 1000)
+        response = context.request.get(url, timeout=timeout_ms)
+        if response.status != 200:
+            raise RuntimeError(f"Не удалось загрузить ресурс {url}, статус {response.status}")
+        logger.debug("Binary fetch via browser url=%s proxy=%s status=%s", url, proxy, response.status)
+        return response.body(), response.headers.get("content-type")
 
     def _goto_with_retry(self, page, url: str) -> None:
         attempts = max(1, self.network.retry.max_attempts)
@@ -275,7 +298,7 @@ class BrowserEngine:
         key = proxy or "__direct__"
         context = self._contexts.get(key)
         if context is None:
-            proxy_arg = {"server": proxy} if proxy else None
+            proxy_arg = self._build_proxy_settings(proxy)
             headers = self._build_default_headers()
             context_kwargs: dict[str, Any] = {
                 "user_agent": random.choice(self.network.user_agents),
@@ -289,6 +312,32 @@ class BrowserEngine:
             context = self._browser.new_context(**context_kwargs)
             self._contexts[key] = context
         return context
+
+    @property
+    def last_proxy(self) -> str | None:
+        return self._last_proxy
+
+    def _build_proxy_settings(self, proxy: str | None) -> dict[str, Any] | None:
+        if not proxy:
+            return None
+        try:
+            parsed = urlsplit(proxy)
+        except ValueError:
+            return {"server": proxy}
+        scheme = parsed.scheme or "http"
+        host = parsed.hostname
+        port = parsed.port
+        if not host:
+            return {"server": proxy}
+        server = f"{scheme}://{host}"
+        if port:
+            server = f"{server}:{port}"
+        proxy_kwargs: dict[str, Any] = {"server": server}
+        if parsed.username:
+            proxy_kwargs["username"] = parsed.username
+        if parsed.password:
+            proxy_kwargs["password"] = parsed.password
+        return proxy_kwargs
 
     def _dispose_context(self, proxy: str | None) -> None:
         key = proxy or "__direct__"

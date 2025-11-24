@@ -1,6 +1,6 @@
 site:
   # Уникальный идентификатор сайта (используется в state/логах)
-  name: "globalalco-6"
+  name: "globalalco-7"
   # Домен, который пойдёт в колонку source_site и будет именем вкладки в Google Sheets
   domain: "globalalco.ru"
   # Базовый URL для нормализации относительных ссылок
