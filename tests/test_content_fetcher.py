@@ -1,13 +1,35 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from bs4 import BeautifulSoup
 
+from app.config.models import NetworkConfig
 from app.crawler.content_fetcher import (
+    ProductContentFetcher,
     _extract_image_from_node,
     _extract_main_image_url,
     _extract_text_content,
     _extract_text_by_selector,
 )
+from app.crawler.engines import ProxyPool
+
+
+class _FakeResponse:
+    def __init__(self, text: str = "<html></html>") -> None:
+        self.text = text
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class _RecordingHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def get(self, url: str, *, headers: dict[str, str], proxies: str | None):
+        self.calls.append({"url": url, "headers": headers, "proxies": proxies})
+        return _FakeResponse()
 
 
 def test_extract_text_content_drops_after_selector():
@@ -62,3 +84,18 @@ def test_extract_image_from_node_understands_picture_sources():
     node = soup.select_one("picture.image")
     url = _extract_image_from_node(node, "https://example.com/product")
     assert url == "https://example.com/a-2x.webp"
+
+
+def test_fetch_html_http_passes_proxy_into_httpx(tmp_path):
+    network = NetworkConfig(
+        user_agents=["UA"],
+        proxy_pool=["http://proxy.local:8080"],
+    )
+    fetcher = ProductContentFetcher(network, Path(tmp_path))
+    fake_client = _RecordingHttpClient()
+    fetcher._http_client = fake_client  # type: ignore[assignment]
+    fetcher._proxy_pool = ProxyPool(["http://proxy.local:8080"])
+    html, proxy = fetcher._fetch_html_http("https://example.com/product")
+    assert html == "<html></html>"
+    assert proxy == "http://proxy.local:8080"
+    assert fake_client.calls[-1]["proxies"] == "http://proxy.local:8080"

@@ -148,7 +148,7 @@ class ProductContentFetcher:
             response = self._http_client.get(
                 product_url,
                 headers=headers,
-                proxy=proxy,
+                proxies=proxy,
             )
             response.raise_for_status()
             logger.debug("HTTP fetch product url=%s proxy=%s ua=%s", product_url, proxy, ua)

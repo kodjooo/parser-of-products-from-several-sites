@@ -87,7 +87,7 @@ class HttpEngine:
                 logger.error("Прокси-пул исчерпан", extra={"url": request.url})
                 raise RuntimeError(str(exc)) from exc
             try:
-                response = self.client.get(request.url, headers=headers, proxy=proxy)
+                response = self.client.get(request.url, headers=headers, proxies=proxy)
                 response.raise_for_status()
                 return response.text
             except httpx.HTTPError as exc:
