@@ -110,7 +110,11 @@ source .venv/bin/activate && set -a && source .env && set +a && python -m app.ma
 Команда активирует виртуальное окружение, экспортирует все переменные из `.env` и запускает агент, используя локальные директории (`config/sites`, `state`, `assets/images`, `secrets`).
 
 ## Деплой на удалённый сервер
-1. Скопируйте исходники и секреты (`scp -r . user@host:/opt/agent`).
+1. Скачайте проект напрямую из репозитория GitHub:
+   ```bash
+   git clone https://github.com/kodjooo/parser-of-products-from-several-sites.git /opt/agent
+   ```
+   Если предпочитаете передать уже настроенные локальные конфиги/секреты, дополнительно скопируйте их (`scp -r config/sites assets/images secrets state user@host:/opt/agent`).
 2. На сервере установите Docker и выполните:
    ```bash
    cd /opt/agent
