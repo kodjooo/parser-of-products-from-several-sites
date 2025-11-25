@@ -51,6 +51,16 @@ class DummyContentFetcher:
         pass
 
 
+class CountingContentFetcher(DummyContentFetcher):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.calls: list[str] = []
+
+    def fetch(self, url: str, *args, **kwargs) -> ProductContent:
+        self.calls.append(url)
+        return super().fetch(url, *args, **kwargs)
+
+
 def _site_config() -> SiteConfig:
     payload: dict[str, Any] = {
         "site": {
@@ -178,4 +188,46 @@ def test_site_crawler_respects_global_stop(monkeypatch: pytest.MonkeyPatch, tmp_
 
     assert len(result.records) == 2
     assert context.products_written == 2
+    store.close()
+
+
+def test_site_crawler_skips_existing_products(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    config = _global_config(tmp_path)
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-1",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+    html = """
+    <div class="product"><a href="https://demo.example/p/1">1</a></div>
+    <div class="product"><a href="https://demo.example/p/2">2</a></div>
+    """
+    responses = {
+        "https://demo.example/catalog/": html,
+        "https://demo.example/catalog/?page=2": "<div></div>",
+    }
+    fake_engine = FakeEngine(responses)
+    fetcher = CountingContentFetcher()
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: fake_engine)
+    monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: fetcher)
+
+    crawler = SiteCrawler(
+        context,
+        site,
+        flush_products=1,
+        existing_product_urls={"https://demo.example/p/1"},
+    )
+    result = crawler.crawl()
+
+    assert len(result.records) == 1
+    assert result.records[0].product_url == "https://demo.example/p/2"
+    assert fetcher.calls == ["https://demo.example/p/2"]
     store.close()

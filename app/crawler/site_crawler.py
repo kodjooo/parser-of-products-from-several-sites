@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 
 from app.config.models import DelayConfig, SiteConfig
 from app.crawler.behavior import BehaviorContext
-from app.crawler.content_fetcher import ProductContentFetcher
+from app.crawler.content_fetcher import ProductContent, ProductContentFetcher
 from app.crawler.engines import BrowserEngine, EngineRequest, create_engine
 from app.crawler.models import CategoryMetrics, ProductRecord, SiteCrawlResult
 from app.crawler.utils import jitter_sleep, normalize_url
@@ -36,6 +36,7 @@ class SiteCrawler:
         site: SiteConfig,
         flush_products: int = 0,
         flush_callback: Optional[Callable[[list[ProductRecord]], None]] = None,
+        existing_product_urls: Optional[set[str]] = None,
     ):
         self.context = context
         self.site = site
@@ -57,11 +58,18 @@ class SiteCrawler:
         )
         self.dedupe_strip = context.config.dedupe.strip_params_blacklist
         self._seen_urls: set[str] = set()
+        self._existing_product_urls: set[str] = set(existing_product_urls or set())
         self.flush_products = max(1, flush_products) if flush_products else 0
         self.flush_callback = flush_callback
         self._pending_chunk: list[ProductRecord] = []
         self._page_delay: DelayConfig = context.config.runtime.page_delay
         self._product_delay: DelayConfig = context.config.runtime.product_delay
+        logger.debug(
+            "SiteCrawler инициализирован: flush_callback=%s, flush_products=%s",
+            bool(self.flush_callback),
+            self.flush_products,
+            extra={"site": self.site.name},
+        )
 
     def crawl(self) -> SiteCrawlResult:
         logger.info("Старт обхода сайта", extra={"site": self.site.name})
@@ -112,7 +120,6 @@ class SiteCrawler:
                 html, category_url, page, metrics
             )
             records.extend(page_records)
-            self._queue_for_flush(page_records)
             if not has_data:
                 break
             metrics.last_page = page
@@ -134,7 +141,6 @@ class SiteCrawler:
                 html, category_url, page, metrics
             )
             records.extend(page_records)
-            self._queue_for_flush(page_records)
             metrics.last_page = page
             self._persist_state(category_url, last_page=page, total=len(records))
             if not has_data or limit_hit or self._should_stop(metrics):
@@ -148,7 +154,6 @@ class SiteCrawler:
         html = self._fetch_page_html(category_url, scroll_limit=self.site.limits.max_scrolls)
         metrics = CategoryMetrics(site_name=self.site.name, category_url=category_url)
         records, has_data, _ = self._process_html(html, category_url, 1, metrics)
-        self._queue_for_flush(records)
         self._emit_pending(force=True)
         if has_data:
             metrics.last_page = 1
@@ -230,6 +235,10 @@ class SiteCrawler:
         if self._should_stop_on_missing_selector(soup):
             return [], False, False
         links = self._extract_product_links(soup)
+        logger.debug(
+            "Парсер категории нашёл ссылок",
+            extra={"site": self.site.name, "page": page_num, "count": len(links)},
+        )
         metrics.total_found += len(links)
         records: list[ProductRecord] = []
         if not links:
@@ -242,6 +251,9 @@ class SiteCrawler:
                 self.dedupe_strip,
             )
             if normalized in self._seen_urls:
+                metrics.total_duplicates += 1
+                continue
+            if normalized in self._existing_product_urls:
                 metrics.total_duplicates += 1
                 continue
             if self.site.selectors.allowed_domains:
@@ -276,8 +288,22 @@ class SiteCrawler:
             record.name_ru = content.name_ru
             record.price_without_discount = content.price_without_discount
             record.price_with_discount = content.price_with_discount
+            if not self._content_loaded(content):
+                logger.warning(
+                    "Страница товара не загружена, запись пропущена",
+                    extra={"url": normalized},
+                )
+                continue
             self._seen_urls.add(normalized)
+            self._existing_product_urls.add(normalized)
             records.append(record)
+            self._queue_for_flush([record])
+            # фиксируем прогресс сразу после успешной карточки
+            self._persist_state(
+                category_url,
+                last_page=page_num,
+                total=len(records),
+            )
             metrics.total_written += 1
             if self.context.register_product():
                 limit_hit = True
@@ -367,6 +393,19 @@ class SiteCrawler:
             return True
         return False
 
+    @staticmethod
+    def _content_loaded(content: ProductContent) -> bool:
+        return any(
+            [
+                content.text_content,
+                content.image_url,
+                content.name_en,
+                content.name_ru,
+                content.price_without_discount,
+                content.price_with_discount,
+            ]
+        )
+
     def _should_stop(self, metrics: CategoryMetrics) -> bool:
         for condition in self.site.stop_conditions:
             if condition.type == "no_new_products" and metrics.total_written == 0:
@@ -374,9 +413,19 @@ class SiteCrawler:
         return False
 
     def _queue_for_flush(self, new_records: list[ProductRecord]) -> None:
+        logger.debug(
+            "Очередь на запись: size=%s, flush_callback=%s",
+            len(new_records) if new_records else 0,
+            bool(self.flush_callback),
+            extra={"site": self.site.name},
+        )
         if not self.flush_callback or not new_records:
             return
         self._pending_chunk.extend(new_records)
+        logger.debug(
+            "Добавлены записи в буфер перед отправкой",
+            extra={"site": self.site.name, "chunk_size": len(self._pending_chunk)},
+        )
         if self.flush_products > 0 and len(self._pending_chunk) >= self.flush_products:
             self._emit_pending()
 
@@ -385,11 +434,19 @@ class SiteCrawler:
             return
         if not self._pending_chunk:
             return
-        if force or (self.flush_products > 0 and len(self._pending_chunk) >= self.flush_products):
-            chunk = self._pending_chunk
-            self._pending_chunk = []
-            self.flush_callback(chunk)
-            # после записи начинаем отсчёт заново
+        should_flush = force or (
+            self.flush_products > 0 and len(self._pending_chunk) >= self.flush_products
+        )
+        if not should_flush:
+            return
+        logger.debug(
+            "Отправляем буфер в Google Sheets",
+            extra={"site": self.site.name, "size": len(self._pending_chunk), "force": force},
+        )
+        chunk = self._pending_chunk
+        self._pending_chunk = []
+        self.flush_callback(chunk)
+        # после записи начинаем отсчёт заново
 
     def _global_stop_reached(self) -> bool:
         return self.context.product_limit_reached()

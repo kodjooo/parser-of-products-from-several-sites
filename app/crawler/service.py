@@ -18,6 +18,7 @@ class CrawlService:
 
     def collect(self) -> list[SiteCrawlResult]:
         results: list[SiteCrawlResult] = []
+        logger.debug("CrawlService writer активен: %s", bool(self.writer))
         for site in self.context.sites:
             if self.context.product_limit_reached():
                 logger.info(
@@ -27,18 +28,37 @@ class CrawlService:
                 break
             if self.writer:
                 self.writer.prepare_site(site)
+                existing_urls = self.writer.get_existing_urls(site)
 
-                def flush(chunk: list[ProductRecord], site_config=site, writer=self.writer):
-                    writer.append_site_records(site_config, chunk)
+                def flush(
+                    chunk: list[ProductRecord],
+                    site_config=site,
+                    writer=self.writer,
+                ):
+                    logger.debug(
+                        "Передаём %s записей в SheetsWriter",
+                        len(chunk),
+                        extra={"site": site.name},
+                    )
+                    writer.append_site_records_with_retry(
+                        site_config,
+                        chunk,
+                        max_attempts=2,
+                        delay_sec=30.0,
+                    )
 
                 flush_callback = flush
+                flush_every = 1
             else:
                 flush_callback = None
+                flush_every = self.context.flush_product_interval
+                existing_urls = set()
             crawler = SiteCrawler(
                 self.context,
                 site,
-                flush_products=self.context.flush_product_interval,
+                flush_products=flush_every,
                 flush_callback=flush_callback,
+                existing_product_urls=existing_urls,
             )
             result = crawler.crawl()
             logger.info(

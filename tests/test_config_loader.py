@@ -111,6 +111,25 @@ def test_load_global_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.runtime.behavior.navigation.extra_products_limit == 1
 
 
+def test_state_path_defaults_follow_run_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # обязательные переменные
+    monkeypatch.setenv("SHEET_SPREADSHEET_ID", "TEST_SHEET")
+    monkeypatch.setenv("SHEET_WRITE_BATCH_SIZE", "200")
+    monkeypatch.setenv("SHEET_STATE_TAB", "_state")
+    monkeypatch.setenv("SHEET_RUNS_TAB", "_runs")
+    monkeypatch.setenv("NETWORK_USER_AGENTS", "agent-1")
+    # убедимся, что пути берутся из APP_RUN_ENV
+    monkeypatch.delenv("STATE_DATABASE_PATH", raising=False)
+    monkeypatch.delenv("NETWORK_BROWSER_STORAGE_STATE_PATH", raising=False)
+
+    monkeypatch.setenv("APP_RUN_ENV", "docker")
+    docker_config = load_global_config(None)
+    assert str(docker_config.state.database) == "/var/app/state/runtime.db"
+    assert docker_config.network.browser_storage_state_path is None
+
+    monkeypatch.setenv("APP_RUN_ENV", "local")
+    local_config = load_global_config(None)
+    assert str(local_config.state.database) == "state/runtime.db"
 def test_iter_site_configs_supports_multiple_files(tmp_path: Path) -> None:
     (tmp_path / "first.yml").write_text(
         yaml.safe_dump(_site_payload("first")), encoding="utf-8"

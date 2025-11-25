@@ -20,6 +20,7 @@ from app.config.models import (
     SheetConfig,
     StateConfig,
 )
+from app.config.runtime_paths import resolve_optional_path, resolve_path
 
 
 def load_global_config_from_env() -> GlobalConfig:
@@ -66,7 +67,12 @@ def load_global_config_from_env() -> GlobalConfig:
                 default=[2.0, 5.0, 10.0],
             ),
         ),
-        browser_storage_state_path=_path("NETWORK_BROWSER_STORAGE_STATE_PATH"),
+        browser_storage_state_path=resolve_optional_path(
+            "NETWORK_BROWSER_STORAGE_STATE_PATH",
+            local_default="secrets/auth.json",
+            docker_default="/secrets/auth.json",
+            require_exists=True,
+        ),
         accept_language=os.getenv("NETWORK_ACCEPT_LANGUAGE"),
         browser_headless=headless_flag,
         browser_preview_delay_sec=_float("NETWORK_BROWSER_PREVIEW_DELAY_SEC", default=0.0)
@@ -90,8 +96,10 @@ def load_global_config_from_env() -> GlobalConfig:
 
     state = StateConfig(
         driver=os.getenv("STATE_DRIVER", "sqlite"),  # type: ignore[arg-type]
-        database=Path(
-            os.getenv("STATE_DATABASE_PATH", "/var/app/state/runtime.db")
+        database=resolve_path(
+            "STATE_DATABASE_PATH",
+            local_default="state/runtime.db",
+            docker_default="/var/app/state/runtime.db",
         ),
     )
 
@@ -265,13 +273,6 @@ def _float_list(name: str, default: Iterable[float] | None = None) -> list[float
         return [float(token) for token in tokens]
     except ValueError as exc:
         raise ConfigLoaderError(f"Элементы {name} должны быть числами") from exc
-
-
-def _path(name: str) -> Path | None:
-    value = os.getenv(name)
-    if not value:
-        return None
-    return Path(value)
 
 
 def _bool(name: str, default: bool | None = None) -> bool | None:

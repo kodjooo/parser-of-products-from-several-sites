@@ -6,6 +6,7 @@ from rich.console import Console
 
 from app.logger import configure_logging
 from app.workflow.runner import AgentRunner, RunnerOptions
+from app.config.runtime_paths import resolve_str_path
 
 console = Console()
 cli = typer.Typer(help="Гибкий агент сбора ссылок товаров из категорий сайтов.")
@@ -25,8 +26,8 @@ def run_agent(
         help="Путь к общей конфигурации запуска (YAML/JSON). "
         "Если не указан, используется конфигурация из переменных окружения.",
     ),
-    sites_dir: Path = typer.Option(
-        ...,
+    sites_dir: Optional[Path] = typer.Option(
+        None,
         "--sites-dir",
         exists=True,
         file_okay=False,
@@ -65,6 +66,14 @@ def run_agent(
 ) -> None:
     """Точка входа для запуска агента."""
     configure_logging(log_level.upper())  # type: ignore[arg-type]
+    if sites_dir is None:
+        sites_dir = Path(
+            resolve_str_path(
+                "SITE_CONFIG_DIR",
+                local_default="config/sites",
+                docker_default="/app/config/sites",
+            )
+        )
     runner = AgentRunner()
     options = RunnerOptions(
         config_path=config_path,

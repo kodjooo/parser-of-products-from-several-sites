@@ -241,6 +241,23 @@ class BrowserEngine:
                 if attempt == attempts - 1:
                     raise RuntimeError(f"Не удалось загрузить {request.url}") from exc
                 time.sleep(wait)
+            except Exception as exc:
+                wait = backoff[min(attempt, len(backoff) - 1)]
+                logger.warning(
+                    "Ошибка Playwright при загрузке страницы, смена прокси",
+                    extra={
+                        "url": request.url,
+                        "proxy": proxy,
+                        "attempt": attempt + 1,
+                        "max_attempts": attempts,
+                    },
+                    exc_info=True,
+                )
+                self._proxy_pool.mark_bad(proxy)
+                self._dispose_context(proxy)
+                if attempt == attempts - 1:
+                    raise RuntimeError(f"Не удалось загрузить {request.url}") from exc
+                time.sleep(wait)
             finally:
                 page.close()
         raise RuntimeError(f"Не удалось загрузить {request.url}")

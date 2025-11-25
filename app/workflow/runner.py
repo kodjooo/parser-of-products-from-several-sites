@@ -8,9 +8,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from rich.console import Console
-import os
 
 from app.config.loader import ConfigLoaderError, iter_site_configs, load_global_config
+from app.config.runtime_paths import resolve_path, resolve_str_path
 from app.crawler.service import CrawlService
 from app.logger import get_logger
 from app.runtime import RuntimeContext
@@ -61,7 +61,11 @@ class AgentRunner:
             logger.warning("Запрошен полный сброс локального состояния")
             state_store.reset_all()
 
-        assets_dir = Path(os.getenv("PRODUCT_IMAGE_DIR", "/app/assets/images"))
+        assets_dir = resolve_path(
+            "PRODUCT_IMAGE_DIR",
+            local_default="assets/images",
+            docker_default="/app/assets/images",
+        )
         assets_dir.mkdir(parents=True, exist_ok=True)
         flush_products_env = os.getenv("WRITE_FLUSH_PRODUCT_INTERVAL")
         if not flush_products_env:

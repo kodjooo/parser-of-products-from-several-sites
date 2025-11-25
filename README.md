@@ -13,6 +13,7 @@
 
 ## Подготовка окружения
    1. Отредактируйте `.env` (см. `.env.example`):
+       - `APP_RUN_ENV` — режим запуска (`local` для прямого запуска из исходников и `docker` для контейнера). Если оставить пути (`GOOGLE_OAUTH_*`, `STATE_DATABASE_PATH`, `PRODUCT_IMAGE_DIR`, `SITE_CONFIG_DIR`, `NETWORK_BROWSER_STORAGE_STATE_PATH`) пустыми, агент подставит значения по умолчанию в зависимости от режима: `local` использует директории из репозитория (`secrets/*.json`, `state/runtime.db`, `config/sites`, `assets/images`), `docker` — внутренние каталоги контейнера (`/app/config/sites`, `/app/assets/images`, `/var/app/state`, `/secrets`).
        - блок Google (пути к JSON, токену и scopes); поддерживаются как desktop OAuth (с сохранением токена), так и service account JSON (тип `service_account`, токен не требуется);
        - для сервисного аккаунта с делегированием доменных прав задайте `GOOGLE_OAUTH_IMPERSONATED_USER` — email пользователя Google Workspace, к которому есть доступ к таблице;
        - блок `SHEET_*`, `RUNTIME_*`, `NETWORK_*`, `DEDUPE_*`, `STATE_*` — все рабочие параметры теперь задаются через `.env`;
@@ -34,6 +35,7 @@
 3. Если планируете браузерный движок локально, выполните `playwright install chromium`.
 
 ## Сборка и запуск в Docker
+Перед контейнерным запуском установите `APP_RUN_ENV=docker` в `.env` (или пробросьте переменную окружения), чтобы значения по умолчанию указывали на каталоги внутри контейнера (`/app/config/sites`, `/app/assets/images`, `/var/app/state`, `/secrets`).
 ```bash
 # Сборка образа
 docker build -t products-agent .
@@ -57,7 +59,7 @@ docker run --rm \
 
 ## OAuth и Google Sheets
 1. Создайте OAuth Client (Desktop) в Google Cloud, скачайте JSON → путь в `.env`.
-2. Первый запуск запросит код авторизации в консоли; токен сохранится в `GOOGLE_OAUTH_TOKEN_PATH`.
+2. Первый запуск запросит код авторизации в консоли; токен сохранится в `GOOGLE_OAUTH_TOKEN_PATH`. Если путь не указан явно, он определяется `APP_RUN_ENV`: локально это `state/token.json`, внутри контейнера — `/var/app/state/token.json` (аналогично `GOOGLE_OAUTH_CLIENT_SECRET_PATH` → `secrets/google-credentials.json` или `/secrets/google-credentials.json`).
 3. Агент сам создаёт вкладки `<домен>`, `_state`, `_runs` и проставляет заголовок первой строки. Для вкладки сайта используются столбцы:
    - A `source_site`
    - B `category` (часть URL после `/items/`)
@@ -76,8 +78,9 @@ docker run --rm \
    - O `price (with discount)`
    - P `status`
    - Q `note`
-   - R `processed_at`
-   - S `llm_raw`
+- R `processed_at`
+- S `llm_raw`
+Каждый товар записывается в таблицу сразу после обработки; при ошибке записи агент делает повторную попытку через 30 секунд (всего до двух попыток), чтобы не терять результаты из-за временных сбоев API.
 
 ## Возобновляемость и state
 - Локальный SQLite (`state.runtime.db`) хранит `last_page`, `last_product_count`, `last_run_ts` на каждую категорию.
@@ -98,6 +101,13 @@ docker run --rm \
   python -m pytest
 ```
 Тесты покрывают загрузчик конфигов, state store, утилиты дедупликации, site crawler (пагинация/резюмируемость) и SheetsWriter (моки API).
+
+## Локальный запуск без Docker
+Если нужно воспроизвести работу агента в локальном окружении, задать `APP_RUN_ENV=local` и выполнить:
+```bash
+source .venv/bin/activate && set -a && source .env && set +a && python -m app.main --sites-dir config/sites
+```
+Команда активирует виртуальное окружение, экспортирует все переменные из `.env` и запускает агент, используя локальные директории (`config/sites`, `state`, `assets/images`, `secrets`).
 
 ## Деплой на удалённый сервер
 1. Скопируйте исходники и секреты (`scp -r . user@host:/opt/agent`).
@@ -125,10 +135,13 @@ docker run --rm \
 
 ```bash
 # старт с пересборкой
-docker compose up --build parser
+docker compose up -d --build parser
 
 # или только запуск (если образ уже собран)
-docker compose up parser
+docker compose up -d parser
+
+# логи
+docker compose logs -f parser
 ```
 
 Команда автоматически подхватит `.env` из корня и смонтирует нужные volume (`config/sites`, `state`, `assets/images`, `secrets`). Каталоги должны существовать заранее.

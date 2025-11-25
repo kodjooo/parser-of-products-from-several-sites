@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -11,6 +12,7 @@ from app.logger import get_logger
 from app.runtime import RuntimeContext
 from app.sheets.client import GoogleSheetsClient
 from app.media.image_saver import ImageSaver
+from app.config.runtime_paths import resolve_path
 
 logger = get_logger(__name__)
 
@@ -49,8 +51,16 @@ class SheetsWriter:
         self.context = context
         self.client = client or GoogleSheetsClient(
             spreadsheet_id=context.config.sheet.spreadsheet_id,
-            client_secret_path=self._env_path("GOOGLE_OAUTH_CLIENT_SECRET_PATH"),
-            token_path=self._env_path("GOOGLE_OAUTH_TOKEN_PATH"),
+            client_secret_path=resolve_path(
+                "GOOGLE_OAUTH_CLIENT_SECRET_PATH",
+                local_default="secrets/google-credentials.json",
+                docker_default="/secrets/google-credentials.json",
+            ),
+            token_path=resolve_path(
+                "GOOGLE_OAUTH_TOKEN_PATH",
+                local_default="state/token.json",
+                docker_default="/var/app/state/token.json",
+            ),
             scopes=self._env_scopes("GOOGLE_OAUTH_SCOPES"),
             batch_size=context.config.sheet.write_batch_size,
             subject=self._env_optional("GOOGLE_OAUTH_IMPERSONATED_USER"),
@@ -62,12 +72,6 @@ class SheetsWriter:
         self.client.ensure_aux_tabs(self.state_tab, self.runs_tab)
         self._prepared_tabs: set[str] = set()
         self._existing_cache: dict[str, set[str]] = {}
-
-    def _env_path(self, key: str) -> Path:
-        value = os.getenv(key)
-        if not value:
-            raise RuntimeError(f"Не задана переменная окружения {key}")
-        return Path(value)
 
     def _env_scopes(self, key: str) -> list[str]:
         value = os.getenv(key)
@@ -88,6 +92,13 @@ class SheetsWriter:
         self._existing_cache[tab_name] = self.client.get_existing_product_urls(tab_name)
         self._prepared_tabs.add(tab_name)
 
+    def get_existing_urls(self, site: SiteConfig) -> set[str]:
+        tab_name = site.domain
+        cache = self._existing_cache.get(tab_name)
+        if cache is None:
+            return set()
+        return set(cache)
+
     def append_site_records(self, site: SiteConfig, records: list[ProductRecord]) -> None:
         if not records:
             return
@@ -96,14 +107,15 @@ class SheetsWriter:
         existing = self._existing_cache.get(tab_name, set())
         rows: list[list[str]] = []
         new_image_paths: list[str] = []
+        new_urls: list[str] = []
         for record in records:
             if record.product_url in existing:
                 continue
-            existing.add(record.product_url)
             new_path = self._ensure_image_saved(record)
             if new_path:
                 new_image_paths.append(new_path)
             rows.append(self._record_to_row(record))
+            new_urls.append(record.product_url)
         if not rows:
             return
         logger.info(
@@ -115,6 +127,38 @@ class SheetsWriter:
         except Exception:
             self._cleanup_images(new_image_paths)
             raise
+        else:
+            existing.update(new_urls)
+
+    def append_site_records_with_retry(
+        self,
+        site: SiteConfig,
+        records: list[ProductRecord],
+        *,
+        max_attempts: int = 2,
+        delay_sec: float = 30.0,
+    ) -> None:
+        """
+        Оборачивает append_site_records повторными попытками.
+        """
+        if not records:
+            return
+        attempt = 1
+        while True:
+            try:
+                self.append_site_records(site, records)
+                return
+            except Exception:
+                if attempt >= max_attempts:
+                    raise
+                logger.warning(
+                    "Не удалось записать строки в Google Sheets, повтор через %.1f сек",
+                    delay_sec,
+                    extra={"site": site.name, "attempt": attempt},
+                    exc_info=True,
+                )
+                time.sleep(delay_sec)
+                attempt += 1
 
     def finalize(self, results: list[SiteCrawlResult]) -> None:
         if not results:

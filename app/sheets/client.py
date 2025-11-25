@@ -124,7 +124,8 @@ class GoogleSheetsClient:
         )
 
     def get_existing_product_urls(self, tab_name: str) -> set[str]:
-        range_name = f"{tab_name}!C:C"
+        # Колонка D содержит product_url (см. SheetsWriter.SITE_HEADER)
+        range_name = f"{tab_name}!D:D"
         response = self._retry_call(
             lambda: self.service.spreadsheets()
             .values()

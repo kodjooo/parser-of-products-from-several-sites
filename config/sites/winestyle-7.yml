@@ -1,6 +1,6 @@
 site:
   # Уникальный идентификатор сайта (используется в state/логах)
-  name: "winestyle-3"
+  name: "winestyle-7"
   # Домен, который пойдёт в колонку source_site и будет именем вкладки в Google Sheets
   domain: "winestyle.ru"
   # Базовый URL для нормализации относительных ссылок
