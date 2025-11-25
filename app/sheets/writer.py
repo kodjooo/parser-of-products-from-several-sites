@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 import time
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable, Sequence
 
 from app.config.models import SiteConfig
 from app.crawler.models import ProductRecord, SiteCrawlResult
@@ -135,29 +135,32 @@ class SheetsWriter:
         site: SiteConfig,
         records: list[ProductRecord],
         *,
-        max_attempts: int = 2,
-        delay_sec: float = 30.0,
+        max_attempts: int = 3,
+        delay_sec: float | Sequence[float] | None = None,
     ) -> None:
         """
         Оборачивает append_site_records повторными попытками.
         """
         if not records:
             return
+        attempts = max(1, max_attempts)
+        delay_schedule = self._resolve_delay_schedule(delay_sec, attempts)
         attempt = 1
         while True:
             try:
                 self.append_site_records(site, records)
                 return
             except Exception:
-                if attempt >= max_attempts:
+                if attempt >= attempts:
                     raise
+                wait = delay_schedule[attempt - 1]
                 logger.warning(
                     "Не удалось записать строки в Google Sheets, повтор через %.1f сек",
-                    delay_sec,
+                    wait,
                     extra={"site": site.name, "attempt": attempt},
                     exc_info=True,
                 )
-                time.sleep(delay_sec)
+                time.sleep(wait)
                 attempt += 1
 
     def finalize(self, results: list[SiteCrawlResult]) -> None:
@@ -219,6 +222,38 @@ class SheetsWriter:
                 Path(path_str).unlink(missing_ok=True)
             except OSError:
                 continue
+
+    def _resolve_delay_schedule(
+        self,
+        delay_spec: float | Sequence[float] | None,
+        attempts: int,
+    ) -> list[float]:
+        """Возвращает список задержек между попытками."""
+        required = max(attempts - 1, 0)
+        if required == 0:
+            return []
+
+        def _normalize(values: Sequence[float]) -> list[float]:
+            normalized: list[float] = []
+            for value in values:
+                try:
+                    normalized.append(max(0.0, float(value)))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Некорректное значение задержки") from exc
+            if not normalized:
+                normalized.append(0.0)
+            return normalized
+
+        if delay_spec is None:
+            base = [600.0, 1200.0]
+        elif isinstance(delay_spec, Sequence) and not isinstance(delay_spec, (str, bytes)):
+            base = _normalize(delay_spec)
+        else:
+            base = _normalize([delay_spec])
+
+        while len(base) < required:
+            base.append(base[-1])
+        return base[:required]
 
     def _write_runs(self, results: list[SiteCrawlResult]) -> None:
         finished = datetime.now(timezone.utc).isoformat()

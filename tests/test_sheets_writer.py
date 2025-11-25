@@ -241,6 +241,62 @@ def test_append_with_retry_retries_once(tmp_path: Path, monkeypatch: pytest.Monk
     assert client.appended["demo.example"][0][3] == "https://demo/p/new"
 
 
+def test_retry_defaults_wait_10_and_20_minutes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _global_config(tmp_path)
+    context = RuntimeContext(
+        run_id="run-default",
+        started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        config=config,
+        sites=[],
+        state_store=StateStub(),  # type: ignore[arg-type]
+        dry_run=False,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+    )
+    secret_path = _service_account_json(tmp_path)
+    os.environ["GOOGLE_OAUTH_CLIENT_SECRET_PATH"] = str(secret_path)
+    os.environ["GOOGLE_OAUTH_TOKEN_PATH"] = str(tmp_path / "token.json")
+    os.environ["GOOGLE_OAUTH_SCOPES"] = "https://www.googleapis.com/auth/spreadsheets"
+
+    client = FakeSheetsClient()
+    call_count = {"value": 0}
+    original_append = client.append_rows
+
+    def flaky_append(tab_name, rows):
+        call_count["value"] += 1
+        if call_count["value"] < 3:
+            raise RuntimeError("temporary outage")
+        return original_append(tab_name, rows)
+
+    client.append_rows = flaky_append  # type: ignore[assignment]
+
+    waits: list[float] = []
+    monkeypatch.setattr("time.sleep", lambda value: waits.append(value))
+
+    writer = SheetsWriter(context, client=client, image_saver=FakeImageSaver())  # type: ignore[arg-type]
+    site = SiteConfig.model_validate(
+        {
+            "site": {"name": "demo", "domain": "demo.example"},
+            "selectors": {"product_link_selector": ".card a"},
+            "pagination": {"mode": "numbered_pages"},
+            "limits": {},
+            "category_urls": ["https://demo.example/catalog/"],
+        }
+    )
+    writer.prepare_site(site)
+    record = ProductRecord(
+        source_site="demo.example",
+        category_url="https://demo.example/catalog/",
+        product_url="https://demo/p/fail-twice",
+        run_id="run-default",
+    )
+
+    writer.append_site_records_with_retry(site, [record])
+
+    assert call_count["value"] == 3
+    assert waits == [600.0, 1200.0]
+
+
 class DummySheetsAPI:
     def __init__(self, response: dict):
         self._response = response
