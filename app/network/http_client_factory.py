@@ -8,8 +8,13 @@ import httpx
 class HttpClientFactory:
     """Кеширует httpx.Client по значению прокси."""
 
-    def __init__(self, *, base_kwargs: Dict[str, Any] | None = None) -> None:
-        self._base_kwargs = base_kwargs or {}
+    def __init__(self, *, base_kwargs: Dict[str, Any] | None = None, **kwargs: Any) -> None:
+        if base_kwargs is not None and kwargs:
+            raise ValueError("Используйте либо base_kwargs, либо именованные параметры, но не оба")
+        if base_kwargs is not None:
+            self._base_kwargs = dict(base_kwargs)
+        else:
+            self._base_kwargs = dict(kwargs)
         self._clients: dict[str, httpx.Client] = {}
 
     def get(self, proxy: str | None) -> httpx.Client:
