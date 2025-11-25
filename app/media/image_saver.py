@@ -11,6 +11,7 @@ from app.config.models import NetworkConfig
 from app.crawler.engines import ProxyPool, ProxyExhaustedError
 from app.crawler.utils import pick_user_agent
 from app.logger import get_logger
+from app.network.http_client_factory import HttpClientFactory
 
 logger = get_logger(__name__)
 
@@ -22,7 +23,7 @@ class ImageSaver:
         self.network = network
         self.image_dir = image_dir
         self.image_dir.mkdir(parents=True, exist_ok=True)
-        self.client = httpx.Client(
+        self._client_factory = HttpClientFactory(
             timeout=network.request_timeout_sec,
             follow_redirects=True,
         )
@@ -39,10 +40,10 @@ class ImageSaver:
                 except ProxyExhaustedError:
                     logger.error("Прокси-пул исчерпан для загрузки изображения", extra={"url": url})
                     proxy_to_use = None
-            response = self.client.get(
+            client = self._client_factory.get(proxy_to_use)
+            response = client.get(
                 url,
                 headers={"User-Agent": pick_user_agent(self.network)},
-                proxies=proxy_to_use,
             )
             response.raise_for_status()
             logger.debug("Image download via httpx url=%s proxy=%s", url, proxy_to_use)
@@ -81,7 +82,7 @@ class ImageSaver:
         )
 
     def close(self) -> None:
-        self.client.close()
+        self._client_factory.close()
 
     def _write_file(
         self,

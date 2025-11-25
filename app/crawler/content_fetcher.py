@@ -14,6 +14,7 @@ from app.crawler.engines import BrowserEngine, EngineRequest, ProxyPool, ProxyEx
 from app.crawler.utils import pick_user_agent
 from app.media.image_saver import ImageSaver
 from app.logger import get_logger
+from app.network.http_client_factory import HttpClientFactory
 
 logger = get_logger(__name__)
 
@@ -46,7 +47,7 @@ class ProductContentFetcher:
         self.image_dir = image_dir
         self.image_dir.mkdir(parents=True, exist_ok=True)
         self._mode = fetch_engine
-        self._http_client: httpx.Client | None = None
+        self._http_client_factory: HttpClientFactory | None = None
         self._browser: BrowserEngine | None = None
         self._owns_browser = False
         self._proxy_pool = ProxyPool(network.proxy_pool, allow_direct=network.proxy_allow_direct)
@@ -58,9 +59,11 @@ class ProductContentFetcher:
                 self._browser = BrowserEngine(network, behavior=behavior_config)
                 self._owns_browser = True
         else:
-            self._http_client = httpx.Client(
-                timeout=network.request_timeout_sec,
-                follow_redirects=True,
+            self._http_client_factory = HttpClientFactory(
+                base_kwargs={
+                    "timeout": network.request_timeout_sec,
+                    "follow_redirects": True,
+                }
             )
         self.image_saver = ImageSaver(network, image_dir, proxy_pool=self._proxy_pool)
 
@@ -133,7 +136,7 @@ class ProductContentFetcher:
         )
 
     def _fetch_html_http(self, product_url: str) -> tuple[str | None, str | None]:
-        if not self._http_client:
+        if not self._http_client_factory:
             return None, None
         try:
             ua = pick_user_agent(self.network)
@@ -145,10 +148,10 @@ class ProductContentFetcher:
             except ProxyExhaustedError:
                 logger.error("Прокси-пул исчерпан для HTTP-загрузки", extra={"url": product_url})
                 return None, None
-            response = self._http_client.get(
+            client = self._http_client_factory.get(proxy)
+            response = client.get(
                 product_url,
                 headers=headers,
-                proxies=proxy,
             )
             response.raise_for_status()
             logger.debug("HTTP fetch product url=%s proxy=%s ua=%s", product_url, proxy, ua)
@@ -181,8 +184,8 @@ class ProductContentFetcher:
             return None
 
     def close(self) -> None:
-        if self._http_client:
-            self._http_client.close()
+        if self._http_client_factory:
+            self._http_client_factory.close()
         if self._browser and self._owns_browser:
             self._browser.shutdown()
         self.image_saver.close()

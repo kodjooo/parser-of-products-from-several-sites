@@ -64,6 +64,11 @@ class SiteCrawler:
         self._pending_chunk: list[ProductRecord] = []
         self._page_delay: DelayConfig = context.config.runtime.page_delay
         self._product_delay: DelayConfig = context.config.runtime.product_delay
+        state_path = getattr(self.context.state_store, "path", None)
+        if state_path:
+            self._skipped_log_path = state_path.with_name("skipped_products.log")
+        else:
+            self._skipped_log_path = Path("state/skipped_products.log")
         logger.debug(
             "SiteCrawler инициализирован: flush_callback=%s, flush_products=%s",
             bool(self.flush_callback),
@@ -269,17 +274,26 @@ class SiteCrawler:
                 product_id_hash=product_hash,
                 category=self._map_category_slug(category_url),
             )
-            content = self.content_fetcher.fetch(
-                normalized,
-                image_selector=self.site.selectors.main_image_selector,
-                drop_after_selectors=self.site.selectors.content_drop_after,
-                download_image=True,
-                name_en_selector=self.site.selectors.name_en_selector,
-                name_ru_selector=self.site.selectors.name_ru_selector,
-                price_without_discount_selector=self.site.selectors.price_without_discount_selector,
-                price_with_discount_selector=self.site.selectors.price_with_discount_selector,
-                behavior_context=self._build_product_behavior_context(normalized),
-            )
+            try:
+                content = self.content_fetcher.fetch(
+                    normalized,
+                    image_selector=self.site.selectors.main_image_selector,
+                    drop_after_selectors=self.site.selectors.content_drop_after,
+                    download_image=True,
+                    name_en_selector=self.site.selectors.name_en_selector,
+                    name_ru_selector=self.site.selectors.name_ru_selector,
+                    price_without_discount_selector=self.site.selectors.price_without_discount_selector,
+                    price_with_discount_selector=self.site.selectors.price_with_discount_selector,
+                    behavior_context=self._build_product_behavior_context(normalized),
+                )
+            except Exception as exc:
+                logger.error(
+                    "Ошибка при обработке товара, запись пропущена",
+                    extra={"url": normalized, "error": str(exc)},
+                )
+                metrics.total_failed += 1
+                self._log_skipped_product(normalized, exc)
+                continue
             record.content_text = content.text_content
             record.image_url = content.image_url
             record.image_path = content.image_path
@@ -293,6 +307,8 @@ class SiteCrawler:
                     "Страница товара не загружена, запись пропущена",
                     extra={"url": normalized},
                 )
+                metrics.total_failed += 1
+                self._log_skipped_product(normalized, None)
                 continue
             self._seen_urls.add(normalized)
             self._existing_product_urls.add(normalized)
@@ -316,6 +332,20 @@ class SiteCrawler:
                 break
             self._sleep_between_products()
         return records, bool(records), limit_hit
+
+    def _log_skipped_product(self, url: str, error: Exception | None) -> None:
+        try:
+            self._skipped_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._skipped_log_path.open("a", encoding="utf-8") as dump:
+                line = f"{datetime.now(timezone.utc).isoformat()} {url}"
+                if error:
+                    line = f"{line} | {error}"
+                dump.write(f"{line}\n")
+        except Exception as exc:
+            logger.error(
+                "Не удалось записать лог пропущенного товара",
+                extra={"url": url, "error": str(exc)},
+            )
 
     def _should_stop_on_missing_selector(self, soup: BeautifulSoup) -> bool:
         for condition in self.site.stop_conditions:

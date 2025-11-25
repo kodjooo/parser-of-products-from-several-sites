@@ -27,9 +27,22 @@ class _RecordingHttpClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def get(self, url: str, *, headers: dict[str, str], proxies: str | None):
-        self.calls.append({"url": url, "headers": headers, "proxies": proxies})
+    def get(self, url: str, *, headers: dict[str, str]):
+        self.calls.append({"url": url, "headers": headers})
         return _FakeResponse()
+
+
+class _FakeClientFactory:
+    def __init__(self, client: _RecordingHttpClient) -> None:
+        self.client = client
+        self.requested_proxies: list[str | None] = []
+
+    def get(self, proxy: str | None) -> _RecordingHttpClient:
+        self.requested_proxies.append(proxy)
+        return self.client
+
+    def close(self) -> None:
+        return None
 
 
 def test_extract_text_content_drops_after_selector():
@@ -93,9 +106,10 @@ def test_fetch_html_http_passes_proxy_into_httpx(tmp_path):
     )
     fetcher = ProductContentFetcher(network, Path(tmp_path))
     fake_client = _RecordingHttpClient()
-    fetcher._http_client = fake_client  # type: ignore[assignment]
+    factory = _FakeClientFactory(fake_client)
+    fetcher._http_client_factory = factory  # type: ignore[assignment]
     fetcher._proxy_pool = ProxyPool(["http://proxy.local:8080"])
     html, proxy = fetcher._fetch_html_http("https://example.com/product")
     assert html == "<html></html>"
     assert proxy == "http://proxy.local:8080"
-    assert fake_client.calls[-1]["proxies"] == "http://proxy.local:8080"
+    assert factory.requested_proxies[-1] == "http://proxy.local:8080"

@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from app.config.models import HumanBehaviorConfig, NetworkConfig, PaginationConfig, WaitCondition
 from app.crawler.behavior import BehaviorContext, HumanBehaviorController
 from app.logger import get_logger
+from app.network.http_client_factory import HttpClientFactory
 
 logger = get_logger(__name__)
 
@@ -63,9 +64,11 @@ class HttpEngine:
         self.network = network
         self._proxy_pool = ProxyPool(network.proxy_pool, proxy_override, allow_direct=network.proxy_allow_direct)
         self.timeout = network.request_timeout_sec
-        self.client = httpx.Client(
-            timeout=self.timeout,
-            follow_redirects=True,
+        self._client_factory = HttpClientFactory(
+            base_kwargs={
+                "timeout": self.timeout,
+                "follow_redirects": True,
+            }
         )
 
     def _pick_proxy(self) -> str | None:
@@ -87,7 +90,8 @@ class HttpEngine:
                 logger.error("Прокси-пул исчерпан", extra={"url": request.url})
                 raise RuntimeError(str(exc)) from exc
             try:
-                response = self.client.get(request.url, headers=headers, proxies=proxy)
+                client = self._client_factory.get(proxy)
+                response = client.get(request.url, headers=headers)
                 response.raise_for_status()
                 return response.text
             except httpx.HTTPError as exc:
@@ -102,7 +106,7 @@ class HttpEngine:
         raise RuntimeError(f"Не удалось загрузить {request.url}")
 
     def shutdown(self) -> None:
-        self.client.close()
+        self._client_factory.close()
 
 
 class BrowserEngine:

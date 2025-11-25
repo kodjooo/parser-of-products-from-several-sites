@@ -36,6 +36,10 @@ class StateStore:
         self._ensure_schema()
         logger.info("Инициализировано локальное состояние", extra={"db": str(db_path)})
 
+    @property
+    def path(self) -> Path:
+        return self.db_path
+
     def _ensure_schema(self) -> None:
         with self._conn:
             self._conn.execute(
