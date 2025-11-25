@@ -110,32 +110,31 @@ source .venv/bin/activate && set -a && source .env && set +a && python -m app.ma
 Команда активирует виртуальное окружение, экспортирует все переменные из `.env` и запускает агент, используя локальные директории (`config/sites`, `state`, `assets/images`, `secrets`).
 
 ## Деплой на удалённый сервер
-1. Скачайте проект напрямую из репозитория GitHub:
+1. На сервере перейдите в каталог, где хотите держать агент, и клонируйте репозиторий рядом с текущим терминалом:
    ```bash
-   git clone https://github.com/kodjooo/parser-of-products-from-several-sites.git /opt/agent
+   git clone https://github.com/kodjooo/parser-of-products-from-several-sites.git
+   cd parser-of-products-from-several-sites
    ```
-   Если предпочитаете передать уже настроенные локальные конфиги/секреты, дополнительно скопируйте их (`scp -r config/sites assets/images secrets state user@host:/opt/agent`).
-2. На сервере установите Docker и выполните:
+   Если часть конфигов/секретов уже подготовлена локально, скопируйте их в свежесозданную папку (например, `scp -r config/sites assets/images secrets state user@host:~/parser-of-products-from-several-sites/`).
+2. На сервере установите Docker и из текущего каталога репозитория выполните:
    ```bash
-   cd /opt/agent
    docker build -t products-agent .
    ```
-3. Создайте директории `/opt/agent/config/sites`, `/opt/agent/state`, `/opt/agent/assets/images`, `/opt/agent/secrets` и положите туда конфиги/volume (копируйте из репозитория/CI).
+3. Убедитесь, что рядом с проектом есть каталоги `config/sites`, `state`, `assets/images`, `secrets` (они уже присутствуют в репозитории; наполните их собственными данными при необходимости).
 4. Запускайте контейнер командой:
    ```bash
    docker run --rm \
-     --env-file /opt/agent/.env \
-     -v /opt/agent/config/sites:/app/config/sites \
-     -v /opt/agent/state:/var/app/state \
-     -v /opt/agent/assets/images:/app/assets/images \
-     -v /opt/agent/secrets:/secrets \
-  products-agent \
-  python -m app.main
+     --env-file ./.env \
+     -v $(pwd)/config/sites:/app/config/sites \
+     -v $(pwd)/state:/var/app/state \
+     -v $(pwd)/assets/images:/app/assets/images \
+     -v $(pwd)/secrets:/secrets \
+     products-agent \
+     python -m app.main
    ```
 5. Для регулярных запусков создайте systemd unit или cron-задачу, использующую эту команду (опционально добавьте `--dry-run`, `--no-resume` при необходимости).
-6. Обновлять код на сервере теперь просто: заходите в каталог проекта и выполняйте:
+6. Чтобы обновить код, находясь в корне репозитория, выполните:
    ```bash
-   cd /opt/agent
    git pull origin main
    docker compose up -d --build parser
    ```
