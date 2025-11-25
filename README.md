@@ -129,6 +129,13 @@ source .venv/bin/activate && set -a && source .env && set +a && python -m app.ma
   python -m app.main
    ```
 5. Для регулярных запусков создайте systemd unit или cron-задачу, использующую эту команду (опционально добавьте `--dry-run`, `--no-resume` при необходимости).
+6. Обновлять код на сервере теперь просто: заходите в каталог проекта и выполняйте:
+   ```bash
+   cd /opt/agent
+   git pull origin main
+   docker compose up -d --build parser
+   ```
+   Команда подтянет свежие изменения из GitHub и пересоберёт контейнер.
 
 ## Docker Compose
 Для упрощения запуска используйте `docker-compose.yml`, который уже описывает сервис `parser`:
