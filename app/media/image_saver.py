@@ -42,7 +42,7 @@ class ImageSaver:
             response = self.client.get(
                 url,
                 headers={"User-Agent": pick_user_agent(self.network)},
-                proxy=proxy_to_use,
+                proxies=proxy_to_use,
             )
             response.raise_for_status()
             logger.debug("Image download via httpx url=%s proxy=%s", url, proxy_to_use)
