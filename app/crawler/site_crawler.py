@@ -113,8 +113,18 @@ class SiteCrawler:
             if self.context.resume
             else None
         )
-        start_page = (state.last_page or 0) + 1 if state else 1
-        max_pages = self.site.limits.max_pages or self.site.pagination.max_pages or 100
+        pagination = self.site.pagination
+        configured_start = max(1, pagination.start_page or 1)
+        if self.context.resume and state:
+            resume_page = (state.last_page or (configured_start - 1)) + 1
+            start_page = max(configured_start, resume_page)
+        else:
+            start_page = configured_start
+        max_pages_limit = self.site.limits.max_pages or pagination.max_pages or 100
+        if pagination.end_page is not None:
+            max_pages = min(max_pages_limit, pagination.end_page)
+        else:
+            max_pages = max_pages_limit
         metrics = CategoryMetrics(site_name=self.site.name, category_url=category_url)
         records: list[ProductRecord] = []
         page = start_page

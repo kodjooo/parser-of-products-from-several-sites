@@ -184,6 +184,15 @@ class PaginationConfig(BaseModel):
     next_button_selector: str | None = None
     max_pages: int | None = Field(default=100, ge=1)
     max_scrolls: int | None = Field(default=100, ge=1)
+    start_page: int = Field(default=1, ge=1)
+    end_page: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _ensure_page_range(self) -> "PaginationConfig":
+        if self.end_page is not None and self.end_page < self.start_page:
+            msg = "end_page не может быть меньше start_page"
+            raise ValueError(msg)
+        return self
 
 
 SelectorValue = str | list[str] | None
