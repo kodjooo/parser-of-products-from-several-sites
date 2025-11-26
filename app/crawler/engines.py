@@ -224,7 +224,7 @@ class BrowserEngine:
 
     def fetch_html(self, request: EngineRequest) -> str:
         quick_attempts = max(1, self.network.retry.max_attempts)
-        quick_waits = [30.0, 60.0]
+        quick_waits = [float(value) for value in (self.network.retry.backoff_sec or [])]
         extra_waits = [120, 240]
         total_attempts = quick_attempts + len(extra_waits)
         used_proxies: set[str | None] = set()

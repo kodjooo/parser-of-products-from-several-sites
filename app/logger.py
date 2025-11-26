@@ -27,6 +27,7 @@ def configure_logging(level: LogLevel = "INFO") -> None:
             format="%(message)s",
             datefmt="[%X]",
             handlers=handlers,
+            force=True,
         )
         _configured = True
     else:

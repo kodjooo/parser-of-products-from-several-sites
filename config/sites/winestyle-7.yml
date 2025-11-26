@@ -23,8 +23,8 @@ selectors:
   name_ru_selector: "div.o-productpage-details div:first-child p"
   price_without_discount_selector: "div.m-productpage-price p:last-child"
   price_with_discount_selector:
-    - "div.m-productpage-price p:first-child"
     - "p.price.price--lg"
+    - "div.m-productpage-price p:first-child"
   category_labels:
     wine/all: "вино"
     champagnes-and-sparkling/all: "игристое"

@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
+import re
 
 from app.config.models import HumanBehaviorConfig, NetworkConfig, PaginationConfig
 from app.crawler.behavior import BehaviorContext
@@ -104,8 +105,8 @@ class ProductContentFetcher:
         title = _extract_title(soup)
         name_en = _extract_text_by_selector(soup, name_en_selector)
         name_ru = _extract_text_by_selector(soup, name_ru_selector)
-        price_wo = _extract_text_by_selector(soup, price_without_discount_selector)
-        price_w = _extract_text_by_selector(soup, price_with_discount_selector)
+        price_wo = _clean_price_text(_extract_text_by_selector(soup, price_without_discount_selector))
+        price_w = _clean_price_text(_extract_text_by_selector(soup, price_with_discount_selector))
 
         image_path = None
         if download_image and image_url:
@@ -238,6 +239,33 @@ def _extract_text_by_selector(
         if text:
             return text
     return None
+
+
+_PRICE_PATTERN = re.compile(r"(\d[\d\s.,]*)(?:\s*(₽|руб(?:\.|ль|ля|лей)?))?", re.IGNORECASE)
+
+
+def _clean_price_text(value: str | None) -> str | None:
+    if not value:
+        return value
+    normalized = value.replace("\xa0", " ").strip()
+    if not normalized:
+        return None
+    match = _PRICE_PATTERN.search(normalized)
+    if not match:
+        return normalized
+    amount = match.group(1) or ""
+    currency = match.group(2) or ("₽" if "₽" in normalized else "")
+    amount = re.sub(r"[^\d.,]", " ", amount)
+    amount = re.sub(r"\s+", " ", amount).strip()
+    if not amount:
+        return None
+    if currency:
+        currency = currency.strip()
+        if currency.startswith(("руб", "РУБ", "Руб", "рУб")):
+            currency = "руб."
+        elif currency != "₽":
+            currency = currency
+    return f"{amount} {currency}".strip()
 
 
 def _extract_title(soup: BeautifulSoup) -> str | None:
