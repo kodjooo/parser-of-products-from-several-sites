@@ -71,3 +71,7 @@ category_urls:
   # Список категорий, которые нужно обойти (для каждой будет своя вкладка source_category)
   - "https://winestyle.ru/wine/all/"
   - "https://winestyle.ru/champagnes-and-sparkling/all/"
+
+runtime:
+  last_page: 45
+  last_position: 28
