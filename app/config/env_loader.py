@@ -88,6 +88,11 @@ def load_global_config_from_env() -> GlobalConfig:
         )
         or 0.0,
         browser_slow_mo_ms=_int("NETWORK_BROWSER_SLOW_MO_MS", default=0) or 0,
+        bad_proxy_log_path=resolve_optional_path(
+            "NETWORK_BAD_PROXY_LOG_PATH",
+            local_default="logs/bad_proxies.log",
+            docker_default="/var/log/parser/bad_proxies.log",
+        ),
     )
 
     dedupe = DedupeConfig(

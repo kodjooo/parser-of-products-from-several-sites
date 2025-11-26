@@ -40,6 +40,7 @@ class NetworkConfig(BaseModel):
     browser_preview_before_behavior_sec: float = Field(default=0.0, ge=0.0)
     browser_extra_page_preview_sec: float = Field(default=0.0, ge=0.0)
     browser_slow_mo_ms: int = Field(default=0, ge=0)
+    bad_proxy_log_path: Path | None = None
 
     @field_validator("user_agents")
     @classmethod

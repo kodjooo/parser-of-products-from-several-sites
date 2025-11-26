@@ -9,4 +9,5 @@ services:
       - ./state:/var/app/state
       - ./assets/images:/app/assets/images
       - ./secrets:/secrets
+      - ./logs:/var/log/parser
     command: ["python", "-m", "app.main"]

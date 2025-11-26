@@ -50,7 +50,11 @@ class ProductContentFetcher:
         self._http_client_factory: HttpClientFactory | None = None
         self._browser: BrowserEngine | None = None
         self._owns_browser = False
-        self._proxy_pool = ProxyPool(network.proxy_pool, allow_direct=network.proxy_allow_direct)
+        self._proxy_pool = ProxyPool(
+            network.proxy_pool,
+            allow_direct=network.proxy_allow_direct,
+            bad_log_path=network.bad_proxy_log_path,
+        )
         if fetch_engine == "browser":
             if shared_browser_engine is not None:
                 self._browser = shared_browser_engine
@@ -138,6 +142,7 @@ class ProductContentFetcher:
     def _fetch_html_http(self, product_url: str) -> tuple[str | None, str | None]:
         if not self._http_client_factory:
             return None, None
+        proxy: str | None = None
         try:
             ua = pick_user_agent(self.network)
             headers = {"User-Agent": ua}
@@ -156,6 +161,8 @@ class ProductContentFetcher:
             response.raise_for_status()
             logger.debug("HTTP fetch product url=%s proxy=%s ua=%s", product_url, proxy, ua)
         except httpx.HTTPError as exc:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 403 and self._proxy_pool:
+                self._proxy_pool.mark_forbidden(proxy)
             logger.warning(
                 "Не удалось загрузить страницу товара",
                 extra={"url": product_url, "error": str(exc)},

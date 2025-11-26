@@ -32,6 +32,7 @@ class ImageSaver:
     def save(self, url: str, title: str | None, fallback_id: str, proxy: str | None = None) -> str | None:
         if not url:
             return None
+        proxy_to_use: str | None = proxy
         try:
             proxy_to_use = proxy
             if proxy_to_use is None and self._proxy_pool:
@@ -47,6 +48,14 @@ class ImageSaver:
             )
             response.raise_for_status()
             logger.debug("Image download via httpx url=%s proxy=%s", url, proxy_to_use)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403 and self._proxy_pool:
+                self._proxy_pool.mark_forbidden(proxy_to_use)
+            logger.warning(
+                "Не удалось скачать изображение",
+                extra={"url": url, "error": str(exc)},
+            )
+            return None
         except httpx.HTTPError as exc:
             logger.warning(
                 "Не удалось скачать изображение",

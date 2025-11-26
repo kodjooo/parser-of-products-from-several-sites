@@ -120,7 +120,7 @@ source .venv/bin/activate && set -a && source .env && set +a && python -m app.ma
    ```bash
    docker build -t products-agent .
    ```
-3. Убедитесь, что рядом с проектом есть каталоги `config/sites`, `state`, `assets/images`, `secrets` (они уже присутствуют в репозитории; наполните их собственными данными при необходимости).
+3. Убедитесь, что рядом с проектом есть каталоги `config/sites`, `state`, `assets/images`, `secrets`, `logs` (пустая директория для логов создаётся один раз; при запуске в Docker она примонтируется в контейнер и будет использоваться как `NETWORK_BAD_PROXY_LOG_PATH` и `LOG_FILE_PATH`).
 4. Запускайте контейнер командой:
    ```bash
    docker run --rm \
@@ -129,6 +129,7 @@ source .venv/bin/activate && set -a && source .env && set +a && python -m app.ma
      -v $(pwd)/state:/var/app/state \
      -v $(pwd)/assets/images:/app/assets/images \
      -v $(pwd)/secrets:/secrets \
+     -v $(pwd)/logs:/var/log/parser \
      products-agent \
      python -m app.main
    ```
@@ -150,11 +151,18 @@ docker compose up -d --build parser
 # или только запуск (если образ уже собран)
 docker compose up -d parser
 
-# логи
+# логи контейнера
 docker compose logs -f parser
+
+# либо чтение локального файла (./logs/parser.log)
+tail -f logs/parser.log
+
+# список прокси/IP, которые дважды получили 403
+cat logs/bad_proxies.log
 ```
 
-Команда автоматически подхватит `.env` из корня и смонтирует нужные volume (`config/sites`, `state`, `assets/images`, `secrets`). Каталоги должны существовать заранее.
+Команда автоматически подхватит `.env` из корня и смонтирует нужные volume (`config/sites`, `state`, `assets/images`, `secrets`, `logs`). Каталоги должны существовать заранее. Сервис записывает историю запусков в `logs/parser.log`, а прокси/IP, получившие два ответа 403 подряд, фиксирует в `logs/bad_proxies.log`, после чего помечает их как испорченные и не использует дальше.
+Если страница подвисает, Playwright сначала делает быстрые ретраи с паузами 30 и 60 секунд (каждый раз меняя прокси), а затем автоматически выполняет ещё две попытки через 2 и 4 минуты. Все ожидания фиксируются в `logs/parser.log`.
 ## Поведенческий слой Playwright
 - Флаг `BEHAVIOR_ENABLED` включает "человеческое" поведение для всех сайтов, у которых `engine=browser`. Контролируются случайные прокрутки, движения мыши, hover по заданным селекторам, возвраты `back/forward`, переходы на главную и открытие дополнительных карточек в фоновом окне.
 - Диапазоны задержек (`BEHAVIOR_ACTION_DELAY_*`, `BEHAVIOR_SCROLL_*`, `BEHAVIOR_MOUSE_*`) задают "естественные" паузы и глубину прокрутки. Селекторы для hover задаются в конфиге сайта: `selectors.hover_targets` для категорий и `selectors.product_hover_targets` для карточек. Для отладки можно выставить `NETWORK_BROWSER_HEADLESS=false`, тогда Playwright покажет реальное окно браузера.

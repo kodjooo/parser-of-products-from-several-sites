@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
@@ -33,28 +34,69 @@ class CrawlerEngine(Protocol):
 
 
 class ProxyPool:
-    def __init__(self, proxies: list[str], override: str | None = None, allow_direct: bool = False):
+    def __init__(
+        self,
+        proxies: list[str],
+        override: str | None = None,
+        *,
+        allow_direct: bool = False,
+        bad_log_path: Path | None = None,
+        forbidden_threshold: int = 2,
+    ):
         self.override = override
         self._proxies = proxies or []
         self._bad: set[str] = set()
         self._has_pool = bool(self._proxies)
         self._allow_direct = allow_direct
+        self._bad_log_path = bad_log_path
+        self._forbidden_threshold = max(1, forbidden_threshold)
+        self._forbidden_counts: dict[str, int] = {}
+        self._direct_blocked = False
 
-    def pick(self) -> str | None:
+    def pick(self, exclude: Iterable[str | None] | None = None) -> str | None:
         if self.override:
             return self.override
         if not self._has_pool and not self._allow_direct:
             return None
-        candidates = [proxy for proxy in self._proxies if proxy not in self._bad]
-        if self._allow_direct:
+        excluded = set(exclude or [])
+        candidates = [proxy for proxy in self._proxies if proxy not in self._bad and proxy not in excluded]
+        if self._allow_direct and not self._direct_blocked and (None not in excluded):
             candidates.append(None)
         if not candidates:
             raise ProxyExhaustedError("Все прокси из пула помечены как недоступные")
         return random.choice(candidates)
 
-    def mark_bad(self, proxy: str | None) -> None:
+    def mark_bad(self, proxy: str | None, *, reason: str | None = None, log: bool = False) -> None:
+        key = self._make_key(proxy)
         if proxy and not self.override and self._has_pool:
             self._bad.add(proxy)
+        elif proxy is None and self._allow_direct:
+            self._direct_blocked = True
+        else:
+            return
+        if log:
+            self._write_bad_entry(key, reason)
+
+    def mark_forbidden(self, proxy: str | None) -> None:
+        key = self._make_key(proxy)
+        current = self._forbidden_counts.get(key, 0) + 1
+        self._forbidden_counts[key] = current
+        if current >= self._forbidden_threshold:
+            self.mark_bad(proxy, reason="HTTP 403", log=True)
+
+    def _make_key(self, proxy: str | None) -> str:
+        return proxy or "__direct__"
+
+    def _write_bad_entry(self, key: str, reason: str | None) -> None:
+        if not self._bad_log_path:
+            return
+        try:
+            self._bad_log_path.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            with self._bad_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"{timestamp}\t{key}\t{reason or ''}\n")
+        except Exception:  # pragma: no cover - запись логов не должна ронять процесс
+            logger.warning("Не удалось записать файл испорченных прокси", extra={"path": str(self._bad_log_path)})
 
 
 class HttpEngine:
@@ -62,7 +104,12 @@ class HttpEngine:
 
     def __init__(self, network: NetworkConfig, proxy_override: str | None = None):
         self.network = network
-        self._proxy_pool = ProxyPool(network.proxy_pool, proxy_override, allow_direct=network.proxy_allow_direct)
+        self._proxy_pool = ProxyPool(
+            network.proxy_pool,
+            proxy_override,
+            allow_direct=network.proxy_allow_direct,
+            bad_log_path=network.bad_proxy_log_path,
+        )
         self.timeout = network.request_timeout_sec
         self._client_factory = HttpClientFactory(
             base_kwargs={
@@ -95,8 +142,12 @@ class HttpEngine:
                 response.raise_for_status()
                 return response.text
             except httpx.HTTPError as exc:
-                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {403, 407}:
-                    self._proxy_pool.mark_bad(proxy)
+                if isinstance(exc, httpx.HTTPStatusError):
+                    status = exc.response.status_code
+                    if status == 403:
+                        self._proxy_pool.mark_forbidden(proxy)
+                    elif status == 407:
+                        self._proxy_pool.mark_bad(proxy)
                     logger.warning(
                         "Ошибка HTTP, повтор с другим прокси",
                         extra={"url": request.url, "error": str(exc), "proxy": proxy},
@@ -123,7 +174,11 @@ class BrowserEngine:
 
         self.network = network
         self._timeout_error = PlaywrightTimeoutError
-        self._proxy_pool = ProxyPool(network.proxy_pool, allow_direct=network.proxy_allow_direct)
+        self._proxy_pool = ProxyPool(
+            network.proxy_pool,
+            allow_direct=network.proxy_allow_direct,
+            bad_log_path=network.bad_proxy_log_path,
+        )
         self._playwright = sync_playwright().start()
         slow_mo_ms = int(network.browser_slow_mo_ms or 0)
         if not network.browser_headless:
@@ -168,11 +223,15 @@ class BrowserEngine:
         self._last_proxy: str | None = None
 
     def fetch_html(self, request: EngineRequest) -> str:
-        attempts = max(1, self.network.retry.max_attempts)
-        backoff = self.network.retry.backoff_sec or [1]
-        for attempt in range(attempts):
+        quick_attempts = max(1, self.network.retry.max_attempts)
+        quick_waits = [30.0, 60.0]
+        extra_waits = [120, 240]
+        total_attempts = quick_attempts + len(extra_waits)
+        used_proxies: set[str | None] = set()
+        for attempt in range(total_attempts):
             try:
-                proxy = self._proxy_pool.pick()
+                exclude = used_proxies if attempt >= quick_attempts else None
+                proxy = self._proxy_pool.pick(exclude=exclude)
             except ProxyExhaustedError as exc:
                 logger.error("Прокси-пул исчерпан в браузерном движке", extra={"url": request.url})
                 raise RuntimeError(str(exc)) from exc
@@ -213,6 +272,7 @@ class BrowserEngine:
                 )
                 html = page.content()
                 self._last_proxy = proxy
+                used_proxies.add(proxy)
                 if self._preview_delay_sec > 0:
                     logger.debug(
                         "Пауза перед закрытием страницы для предпросмотра",
@@ -228,38 +288,44 @@ class BrowserEngine:
                     "Браузер получил 403, смена прокси",
                     extra={"url": request.url, "proxy": proxy},
                 )
-                self._proxy_pool.mark_bad(proxy)
+                self._proxy_pool.mark_forbidden(proxy)
                 self._dispose_context(proxy)
+                used_proxies.add(proxy)
             except self._timeout_error as exc:
-                wait = backoff[min(attempt, len(backoff) - 1)]
+                used_proxies.add(proxy)
+                wait = self._compute_wait(attempt, quick_attempts, total_attempts, quick_waits, extra_waits)
                 logger.warning(
                     "Timeout при загрузке страницы браузером, повтор",
                     extra={
                         "url": request.url,
                         "attempt": attempt + 1,
-                        "max_attempts": attempts,
+                        "max_attempts": total_attempts,
                         "wait": wait,
                         "proxy": proxy,
+                        "extended": attempt >= quick_attempts,
                     },
                 )
-                if attempt == attempts - 1:
+                if attempt == total_attempts - 1:
                     raise RuntimeError(f"Не удалось загрузить {request.url}") from exc
                 time.sleep(wait)
             except Exception as exc:
-                wait = backoff[min(attempt, len(backoff) - 1)]
+                used_proxies.add(proxy)
+                wait = self._compute_wait(attempt, quick_attempts, total_attempts, quick_waits, extra_waits)
                 logger.warning(
                     "Ошибка Playwright при загрузке страницы, смена прокси",
                     extra={
                         "url": request.url,
                         "proxy": proxy,
                         "attempt": attempt + 1,
-                        "max_attempts": attempts,
+                        "max_attempts": total_attempts,
+                        "extended": attempt >= quick_attempts,
+                        "wait": wait,
                     },
                     exc_info=True,
                 )
                 self._proxy_pool.mark_bad(proxy)
                 self._dispose_context(proxy)
-                if attempt == attempts - 1:
+                if attempt == total_attempts - 1:
                     raise RuntimeError(f"Не удалось загрузить {request.url}") from exc
                 time.sleep(wait)
             finally:
@@ -370,6 +436,23 @@ class BrowserEngine:
         if not self.network.accept_language:
             return {}
         return {"Accept-Language": self.network.accept_language}
+
+    @staticmethod
+    def _compute_wait(
+        attempt_index: int,
+        quick_attempts: int,
+        total_attempts: int,
+        quick_waits: list[float],
+        extra_waits: list[int],
+    ) -> float:
+        if attempt_index >= total_attempts - 1:
+            return 0.0
+        if attempt_index < quick_attempts - 1:
+            return quick_waits[min(attempt_index, len(quick_waits) - 1)] if quick_waits else 0.0
+        extra_index = attempt_index - (quick_attempts - 1)
+        if 0 <= extra_index < len(extra_waits):
+            return float(extra_waits[extra_index])
+        return quick_waits[-1] if quick_waits else 0.0
 
 
 class ProxyBannedError(Exception):
