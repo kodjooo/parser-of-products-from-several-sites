@@ -8,3 +8,5 @@ secrets/
 .tmp/
 *.log
 .venv/
+config/sites/
+conf-another-version/
