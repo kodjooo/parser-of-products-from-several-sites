@@ -150,9 +150,10 @@ def test_fetch_html_http_passes_proxy_into_httpx(tmp_path):
 
 
 def test_clean_price_text_extracts_amount_and_currency():
-    assert _clean_price_text("Цена: 1 290 ₽ / шт.") == "1 290 ₽"
+    assert _clean_price_text("Цена: 1\xa0290 ₽ / шт.") == "1 290 ₽"
     assert _clean_price_text("Всего 990 руб.") == "990 руб."
     assert _clean_price_text("~ 5 500,50  рубля за набор") == "5 500,50 руб."
+    assert _clean_price_text("Перейти") is None
 
 
 def test_fetch_uses_browser_engine_for_content(tmp_path):

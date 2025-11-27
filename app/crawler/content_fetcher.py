@@ -252,7 +252,7 @@ def _clean_price_text(value: str | None) -> str | None:
         return None
     match = _PRICE_PATTERN.search(normalized)
     if not match:
-        return normalized
+        return None
     amount = match.group(1) or ""
     currency = match.group(2) or ("₽" if "₽" in normalized else "")
     amount = re.sub(r"[^\d.,]", " ", amount)

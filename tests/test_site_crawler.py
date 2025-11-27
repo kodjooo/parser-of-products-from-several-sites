@@ -11,7 +11,7 @@ from app.crawler.content_fetcher import ProductContent
 from app.crawler.models import ProductRecord
 from app.crawler.site_crawler import SiteCrawler
 from app.runtime import RuntimeContext
-from app.state.storage import StateStore
+from app.state.storage import CategoryState, StateStore
 
 
 class FakeEngine:
@@ -146,7 +146,8 @@ def test_site_crawler_numbered_pages(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     result = crawler.crawl()
 
     assert len(result.records) == 3
-    assert store.get(site.name, str(site.category_urls[0])).last_page == 2
+    # в state сохраняется следующая страница для старта
+    assert store.get(site.name, str(site.category_urls[0])).last_page == 3
     assert result.records[0].content_text.startswith("content-")
     assert result.records[0].image_path is None
     assert result.records[0].category == "catalog"
@@ -271,7 +272,7 @@ def test_site_crawler_respects_start_page(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     urls = [record.product_url for record in result.records]
     assert urls[0].endswith("/p/31")
-    assert store.get(site.name, str(site.category_urls[0])).last_page == 4
+    assert store.get(site.name, str(site.category_urls[0])).last_page == 5
     store.close()
 
 
@@ -310,5 +311,61 @@ def test_site_crawler_respects_end_page(monkeypatch: pytest.MonkeyPatch, tmp_pat
     result = crawler.crawl()
 
     assert len(result.records) == 2
-    assert store.get(site.name, str(site.category_urls[0])).last_page == 2
+    assert store.get(site.name, str(site.category_urls[0])).last_page == 3
+    store.close()
+
+
+def test_site_crawler_resumes_from_last_product(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    config = _global_config(tmp_path)
+    store = StateStore(Path(config.state.database))
+    category = str(site.category_urls[0])
+    # предыдущий запуск обработал страницу 2 до первой ссылки
+    store.upsert(
+        CategoryState(
+            site_name=site.name,
+            category_url=category,
+            last_page=2,
+            last_offset=1,
+            last_product_count=1,
+        )
+    )
+    context = RuntimeContext(
+        run_id="run-resume",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+    html_page1 = """
+    <div class='product'><a href='https://demo.example/p/1'>1</a></div>
+    """
+    html_page2 = """
+    <div class='product'><a href='https://demo.example/p/21'>21</a></div>
+    <div class='product'><a href='https://demo.example/p/22'>22</a></div>
+    <div class='product'><a href='https://demo.example/p/23'>23</a></div>
+    """
+    responses = {
+        "https://demo.example/catalog/": html_page1,
+        "https://demo.example/catalog/?page=2": html_page2,
+        "https://demo.example/catalog/?page=3": "<div></div>",
+    }
+    fake_engine = FakeEngine(responses)
+    fetcher = CountingContentFetcher()
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: fake_engine)
+    monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: fetcher)
+
+    crawler = SiteCrawler(context, site, flush_products=1)
+    result = crawler.crawl()
+
+    urls = [record.product_url for record in result.records]
+    assert urls[0].endswith("/p/22")
+    # после завершения страницы 2 нужно перейти к 3
+    saved_state = store.get(site.name, category)
+    assert saved_state.last_page == 3
+    assert saved_state.last_offset == 0
     store.close()

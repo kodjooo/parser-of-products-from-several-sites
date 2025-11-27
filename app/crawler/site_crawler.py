@@ -115,11 +115,16 @@ class SiteCrawler:
         )
         pagination = self.site.pagination
         configured_start = max(1, pagination.start_page or 1)
+        start_page = configured_start
+        start_offset = 0
         if self.context.resume and state:
-            resume_page = (state.last_page or (configured_start - 1)) + 1
-            start_page = max(configured_start, resume_page)
-        else:
-            start_page = configured_start
+            if state.last_offset is not None:
+                resume_page = state.last_page or configured_start
+                start_page = max(configured_start, resume_page)
+                start_offset = max(0, state.last_offset or 0)
+            else:
+                resume_page = (state.last_page or (configured_start - 1)) + 1
+                start_page = max(configured_start, resume_page)
         max_pages_limit = self.site.limits.max_pages or pagination.max_pages or 100
         if pagination.end_page is not None:
             max_pages = min(max_pages_limit, pagination.end_page)
@@ -132,13 +137,18 @@ class SiteCrawler:
             url = self._build_page_url(category_url, page)
             html = self._fetch_page_html(url)
             page_records, has_data, limit_hit = self._process_html(
-                html, category_url, page, metrics
+                html,
+                category_url,
+                page,
+                metrics,
+                start_offset=start_offset if page == start_page else 0,
+                save_progress=True,
             )
             records.extend(page_records)
+            start_offset = 0
             if not has_data:
                 break
             metrics.last_page = page
-            self._persist_state(category_url, last_page=page, total=len(records))
             if limit_hit or self._should_stop(metrics):
                 break
             page += 1
@@ -157,7 +167,12 @@ class SiteCrawler:
             )
             records.extend(page_records)
             metrics.last_page = page
-            self._persist_state(category_url, last_page=page, total=len(records))
+            self._persist_state(
+                category_url,
+                next_page=page + 1,
+                page_offset=0,
+                total=len(records),
+            )
             if not has_data or limit_hit or self._should_stop(metrics):
                 break
             soup = BeautifulSoup(html, "lxml")
@@ -172,7 +187,12 @@ class SiteCrawler:
         self._emit_pending(force=True)
         if has_data:
             metrics.last_page = 1
-            self._persist_state(category_url, last_page=1, total=len(records))
+            self._persist_state(
+                category_url,
+                next_page=1,
+                page_offset=0,
+                total=len(records),
+            )
         return CategoryResult(records=records, metrics=metrics)
 
     def _fetch_page_html(self, url: str, scroll_limit: int | None = None) -> str:
@@ -245,6 +265,9 @@ class SiteCrawler:
         category_url: str,
         page_num: int,
         metrics: CategoryMetrics,
+        *,
+        start_offset: int = 0,
+        save_progress: bool = False,
     ) -> tuple[list[ProductRecord], bool, bool]:
         soup = BeautifulSoup(html, "lxml")
         if self._should_stop_on_missing_selector(soup):
@@ -259,7 +282,12 @@ class SiteCrawler:
         if not links:
             return records, False, False
         limit_hit = False
-        for link in links:
+        total_links = len(links)
+        handled_offset = start_offset
+        for idx, link in enumerate(links):
+            if idx < start_offset:
+                continue
+            current_offset = idx + 1
             normalized, product_hash = normalize_url(
                 link,
                 self.site.base_url,
@@ -267,13 +295,34 @@ class SiteCrawler:
             )
             if normalized in self._seen_urls:
                 metrics.total_duplicates += 1
+                if save_progress:
+                    self._persist_state(
+                        category_url,
+                        next_page=page_num,
+                        page_offset=current_offset,
+                        total=metrics.total_written,
+                    )
                 continue
             if normalized in self._existing_product_urls:
                 metrics.total_duplicates += 1
+                if save_progress:
+                    self._persist_state(
+                        category_url,
+                        next_page=page_num,
+                        page_offset=current_offset,
+                        total=metrics.total_written,
+                    )
                 continue
             if self.site.selectors.allowed_domains:
                 domain = urlparse(normalized).netloc
                 if domain not in self.site.selectors.allowed_domains:
+                    if save_progress:
+                        self._persist_state(
+                            category_url,
+                            next_page=page_num,
+                            page_offset=current_offset,
+                            total=metrics.total_written,
+                        )
                     continue
             record = ProductRecord(
                 source_site=self.site.domain,
@@ -303,6 +352,13 @@ class SiteCrawler:
                 )
                 metrics.total_failed += 1
                 self._log_skipped_product(normalized, exc)
+                if save_progress:
+                    self._persist_state(
+                        category_url,
+                        next_page=page_num,
+                        page_offset=current_offset,
+                        total=metrics.total_written,
+                    )
                 continue
             record.content_text = content.text_content
             record.image_url = content.image_url
@@ -319,18 +375,26 @@ class SiteCrawler:
                 )
                 metrics.total_failed += 1
                 self._log_skipped_product(normalized, None)
+                if save_progress:
+                    self._persist_state(
+                        category_url,
+                        next_page=page_num,
+                        page_offset=current_offset,
+                        total=metrics.total_written,
+                    )
                 continue
             self._seen_urls.add(normalized)
             self._existing_product_urls.add(normalized)
             records.append(record)
             self._queue_for_flush([record])
-            # фиксируем прогресс сразу после успешной карточки
-            self._persist_state(
-                category_url,
-                last_page=page_num,
-                total=len(records),
-            )
             metrics.total_written += 1
+            if save_progress:
+                self._persist_state(
+                    category_url,
+                    next_page=page_num,
+                    page_offset=current_offset,
+                    total=metrics.total_written,
+                )
             if self.context.register_product():
                 limit_hit = True
                 break
@@ -341,6 +405,15 @@ class SiteCrawler:
                 limit_hit = True
                 break
             self._sleep_between_products()
+            handled_offset = current_offset
+        if save_progress and not limit_hit and total_links > 0:
+            if handled_offset >= total_links:
+                self._persist_state(
+                    category_url,
+                    next_page=page_num + 1,
+                    page_offset=0,
+                    total=metrics.total_written,
+                )
         return records, bool(records), limit_hit
 
     def _log_skipped_product(self, url: str, error: Exception | None) -> None:
@@ -416,12 +489,20 @@ class SiteCrawler:
         labels = self.site.selectors.category_labels
         return labels.get(slug, slug)
 
-    def _persist_state(self, category_url: str, *, last_page: int, total: int) -> None:
+    def _persist_state(
+        self,
+        category_url: str,
+        *,
+        next_page: int,
+        page_offset: int,
+        total: int,
+    ) -> None:
         self.context.state_store.upsert(
             CategoryState(
                 site_name=self.site.name,
                 category_url=category_url,
-                last_page=last_page,
+                last_page=next_page,
+                last_offset=page_offset,
                 last_product_count=total,
                 last_run_ts=datetime.now(timezone.utc),
             )
