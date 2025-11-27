@@ -10,4 +10,7 @@ services:
       - ./assets/images:/app/assets/images
       - ./secrets:/secrets
       - ./logs:/var/log/parser
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     command: ["python", "-m", "app.main"]
