@@ -1,33 +1,34 @@
 site:
   # Уникальный идентификатор сайта (используется в state/логах)
-  name: "globalalco-7"
+  name: "winediscovery-1"
   # Домен, который пойдёт в колонку source_site и будет именем вкладки в Google Sheets
-  domain: "globalalco.ru"
+  domain: "winediscovery.ru"
   # Базовый URL для нормализации относительных ссылок
-  base_url: "https://globalalco.ru"
+  base_url: "winediscovery.ru"
   # Движок обхода: http — requests + парсинг, browser — Playwright (для сайтов с js/инфинит-скроллом)
   engine: "browser"  # допустимые значения: http | browser
 
 selectors:
   # CSS-селектор, который указывает на ссылку товара на странице категории
-  product_link_selector: "div.goods div.panel-body a.img"
+  product_link_selector: "div.products-grid div.products-grid__item a.snippet__up"
   # Ограничение доменов, которые разрешено сохранять (оставьте пустым, если не нужно фильтровать)
-  allowed_domains: ["globalalco.ru"]
+  allowed_domains: ["winediscovery.ru"]
   # Селектор основного изображения на странице товара
-  main_image_selector: "a.thumbnail.main-photo.main-photo-mobile img"
+  main_image_selector: "div.product__content-img picture.product__img source[media='(min-width: 1024px)']"
   # Блоки, после которых не нужно сохранять текст товара целиком (обрезаются вместе с ними)
   content_drop_after:
-    - "div#analog-block-wide"
+    - "footer.page__footer"
   # Дополнительные поля карточки
-  name_en_selector: "div.item-page h1"
-  name_ru_selector: "div.item-page div.product-h1"
-  price_without_discount_selector: "div.priceblock-large span.item-price-big"
-  price_with_discount_selector: "div.priceblock-large s.oldprice"
+  name_en_selector: "div.product__header h1.product__name"
+  name_ru_selector: "div.product__titles div.product__titles-name"
+  price_without_discount_selector: ""
+  price_with_discount_selector: "div.product__buy-box-money div.product__buy-box-price"
   category_labels:
-    Wine: "вино"
-    sparkling-wine-1969: "игристое"
-    krepkie-napitki: "крепкие напитки"
-    Liquor: "ликёры"
+    katalog/vino: "вино"
+    katalog/shampanskoe_i_igristoe: "игристое"
+    katalog/krepkie_napitki: "крепкие напитки"
+    katalog/aksessuary: "аксессуары"
+    katalog/olivkovoe_maslo: "оливковое масло"
 
 pagination:
   # Тип пагинации:
@@ -36,11 +37,11 @@ pagination:
   #   infinite_scroll — бесконечная прокрутка
   mode: "numbered_pages"
   # Название параметра страницы для numbered_pages (если используется другой параметр)
-  param_name: "page"
+  param_name: "PAGEN_1"
   # Жёсткий лимит страниц (если неизвестно, укажите примерное число)
   max_pages: 1200
   # Для next_button можно дополнительно указать селектор кнопки:
-  next_button_selector: "#pages_next"
+  next_button_selector: "a.ui-pagination__page.ui-pagination__page_next"
 
 limits:
   # Максимум товаров, который можно собрать для категории (null — без ограничения)
@@ -51,17 +52,18 @@ limits:
 wait_conditions:
   # Условие ожидания: type=selector — ждём появления элемента; type=delay — просто ждём N секунд
   - type: "selector"
-    value: "div.goods div.panel-body"
+    value: "div.ui-pagination.catalog__pagination"
     timeout_sec: 15
 
 stop_conditions:
   # Пример: если исчезает блок пагинации, останавливаемся
   - type: "missing_selector"
-    value: "#pages_next"
+    value: "a.ui-pagination__page.ui-pagination__page_next"
 
 category_urls:
   # Список категорий, которые нужно обойти (для каждой будет своя вкладка source_category)
-  - "https://www.globalalco.ru/items/Wine"
-  - "https://www.globalalco.ru/items/sparkling-wine-1969"
-  - "https://www.globalalco.ru/items/krepkie-napitki"
-  - "https://www.globalalco.ru/items/Liquor"
+  - "https://winediscovery.ru/katalog/vino/"
+  - "https://winediscovery.ru/katalog/shampanskoe_i_igristoe/"
+  - "https://winediscovery.ru/katalog/krepkie_napitki/"
+  - "https://winediscovery.ru/katalog/aksessuary/"
+  - "https://winediscovery.ru/katalog/olivkovoe_maslo/"

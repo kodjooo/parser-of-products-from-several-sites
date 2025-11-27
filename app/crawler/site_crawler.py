@@ -239,6 +239,8 @@ class SiteCrawler:
             category_url=category_url,
             base_url=self.site.base_url or category_url,
             root_url=root_url,
+            scroll_min_percent=self.site.pagination.scroll_min_percent,
+            scroll_max_percent=self.site.pagination.scroll_max_percent,
         )
 
     def _build_product_behavior_context(self, product_url: str) -> BehaviorContext | None:

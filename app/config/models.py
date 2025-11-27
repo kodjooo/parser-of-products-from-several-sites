@@ -184,6 +184,8 @@ class PaginationConfig(BaseModel):
     next_button_selector: str | None = None
     max_pages: int | None = Field(default=100, ge=1)
     max_scrolls: int | None = Field(default=100, ge=1)
+    scroll_min_percent: int | None = Field(default=None, ge=0, le=100)
+    scroll_max_percent: int | None = Field(default=None, ge=0, le=100)
     start_page: int = Field(default=1, ge=1)
     end_page: int | None = Field(default=None, ge=1)
 
@@ -192,6 +194,10 @@ class PaginationConfig(BaseModel):
         if self.end_page is not None and self.end_page < self.start_page:
             msg = "end_page не может быть меньше start_page"
             raise ValueError(msg)
+        if self.scroll_min_percent is not None and self.scroll_max_percent is not None:
+            if self.scroll_min_percent > self.scroll_max_percent:
+                msg = "scroll_max_percent должен быть не меньше scroll_min_percent"
+                raise ValueError(msg)
         return self
 
 

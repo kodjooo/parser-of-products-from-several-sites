@@ -22,6 +22,8 @@ class BehaviorContext:
     base_url: str | None = None
     root_url: str | None = None
     hover_selectors: list[str] | None = None
+    scroll_min_percent: int | None = None
+    scroll_max_percent: int | None = None
 
 
 @dataclass(slots=True)
@@ -66,7 +68,7 @@ class HumanBehaviorController:
         else:
             remaining_nav = limit_value
         try:
-            actions.extend(self._maybe_scroll(page))
+            actions.extend(self._maybe_scroll(page, context))
             actions.extend(self._maybe_move_mouse(page))
             actions.extend(self._maybe_hover(page, context))
             nav_actions = self._maybe_back_and_forward(page, remaining_nav)
@@ -93,23 +95,27 @@ class HumanBehaviorController:
                 logger.debug("Поведенческий слой пропущен", extra=log_payload)
         return result
 
-    def _maybe_scroll(self, page: Any) -> list[str]:
+    def _maybe_scroll(self, page: Any, context: BehaviorContext | None) -> list[str]:
         if random.random() > self.config.scroll.probability:
             return []
         if random.random() < self.config.scroll.skip_probability:
             return []
         if not hasattr(page, "evaluate"):
             return []
+        min_depth = self.config.scroll.min_depth_percent
+        max_depth = self.config.scroll.max_depth_percent
+        if context is not None:
+            if context.scroll_max_percent is not None:
+                max_depth = max(0, min(context.scroll_max_percent, max_depth))
+            if context.scroll_min_percent is not None:
+                min_depth = max(0, min(context.scroll_min_percent, max_depth))
         actions: list[str] = []
         steps = random.randint(self.config.scroll.min_steps, self.config.scroll.max_steps)
-        depth = random.randint(
-            self.config.scroll.min_depth_percent,
-            self.config.scroll.max_depth_percent,
-        )
+        depth = random.randint(min_depth, max_depth)
         current = 0
         for _ in range(steps):
             increment = depth / steps
-            current = min(100, current + increment + random.uniform(-5, 5))
+            current = max(0.0, min(depth, current + increment + random.uniform(-5, 5)))
             fraction = max(0.0, min(1.0, current / 100))
             try:
                 page.evaluate(

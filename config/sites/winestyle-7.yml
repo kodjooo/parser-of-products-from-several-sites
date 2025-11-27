@@ -47,8 +47,13 @@ pagination:
   param_name: "page"
   # Жёсткий лимит страниц (если неизвестно, укажите примерное число)
   max_pages: 1500
+  # Глубина скролла в процентах, чтобы не дотягивать до подгрузки следующих страниц
+  scroll_min_percent: 5
+  scroll_max_percent: 30
   # Для next_button можно дополнительно указать селектор кнопки:
   next_button_selector: "button.ws-pagination__btn-more"
+  start_page: 1      # необязательно, по умолчанию 1
+  end_page: 200       # необязательно, по умолчанию без ограничения
 
 limits:
   # Максимум товаров, который можно собрать для категории (null — без ограничения)
@@ -70,8 +75,3 @@ stop_conditions:
 category_urls:
   # Список категорий, которые нужно обойти (для каждой будет своя вкладка source_category)
   - "https://winestyle.ru/wine/all/"
-  - "https://winestyle.ru/champagnes-and-sparkling/all/"
-
-runtime:
-  last_page: 45
-  last_position: 28

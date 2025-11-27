@@ -215,3 +215,43 @@ def test_behavior_hover_uses_context_selectors() -> None:
     result = controller.apply(page, context=context, meta={"url": "https://demo.example/product"})
 
     assert any(action.startswith("hover:.product-hover") for action in result.actions)
+
+
+def test_behavior_scroll_respects_context_limits() -> None:
+    config = HumanBehaviorConfig(
+        enabled=True,
+        debug=False,
+        action_delay=_zero_delay(),
+        scroll=BehaviorScrollConfig(
+            probability=1.0,
+            skip_probability=0.0,
+            min_depth_percent=60,
+            max_depth_percent=90,
+            min_steps=1,
+            max_steps=1,
+            pause_between_steps=_zero_delay(),
+        ),
+        mouse=BehaviorMouseConfig(
+            move_count_min=0,
+            move_count_max=0,
+            hover_probability=0.0,
+            hover_selectors=[],
+        ),
+        navigation=BehaviorNavigationConfig(
+            back_probability=0.0,
+            extra_products_probability=0.0,
+            extra_products_limit=0,
+            visit_root_probability=0.0,
+            max_additional_chain=0,
+        ),
+    )
+    controller = HumanBehaviorController(config, default_timeout_sec=5.0)
+    page = _StubPage()
+    context = BehaviorContext(scroll_min_percent=5, scroll_max_percent=25)
+
+    result = controller.apply(page, context=context, meta={"url": "https://demo.example"})
+
+    scroll_actions = [a for a in result.actions if a.startswith("scroll:")]
+    assert scroll_actions
+    percents = [int(action.split(":")[1]) for action in scroll_actions]
+    assert max(percents) <= 25
