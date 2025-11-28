@@ -70,9 +70,11 @@ class SiteCrawler:
         self._product_delay: DelayConfig = context.config.runtime.product_delay
         state_path = getattr(self.context.state_store, "path", None)
         if state_path:
-            self._skipped_log_path = state_path.with_name("skipped_products.log")
+            base_path = state_path
         else:
-            self._skipped_log_path = Path("state/skipped_products.log")
+            base_path = Path("state/runtime.db")
+        self._skipped_log_path = base_path.with_name("skipped_products.log")
+        self._duplicates_log_path = base_path.with_name("duplicate_products.log")
         logger.debug(
             "SiteCrawler инициализирован: flush_callback=%s, flush_products=%s",
             bool(self.flush_callback),
@@ -370,6 +372,7 @@ class SiteCrawler:
             )
             if normalized in self._seen_urls:
                 metrics.total_duplicates += 1
+                self._log_duplicate_product(normalized, "seen_in_run")
                 if save_progress:
                     self._persist_state(
                         category_url,
@@ -380,6 +383,7 @@ class SiteCrawler:
                 continue
             if normalized in self._existing_product_urls:
                 metrics.total_duplicates += 1
+                self._log_duplicate_product(normalized, "existing_in_sheet")
                 if save_progress:
                     self._persist_state(
                         category_url,
@@ -574,6 +578,18 @@ class SiteCrawler:
         except Exception as exc:
             logger.error(
                 "Не удалось записать лог пропущенного товара",
+                extra={"url": url, "error": str(exc)},
+            )
+
+    def _log_duplicate_product(self, url: str, reason: str) -> None:
+        try:
+            self._duplicates_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._duplicates_log_path.open("a", encoding="utf-8") as dump:
+                timestamp = datetime.now(timezone.utc).isoformat()
+                dump.write(f"{timestamp} {reason} {url}\n")
+        except Exception as exc:
+            logger.error(
+                "Не удалось записать лог дубликатов",
                 extra={"url": url, "error": str(exc)},
             )
 
