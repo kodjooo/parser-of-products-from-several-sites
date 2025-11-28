@@ -32,6 +32,7 @@ class SiteCrawler:
     """Обходит все категории сайта и готовит результаты для записи."""
 
     _EMPTY_CATEGORY_RETRY_DELAYS = (60, 600, 1200, 3600)
+    _MAX_EMPTY_PAGES_STREAK = 3
 
     def __init__(
         self,
@@ -136,6 +137,7 @@ class SiteCrawler:
         metrics = CategoryMetrics(site_name=self.site.name, category_url=category_url)
         records: list[ProductRecord] = []
         page = start_page
+        empty_pages_streak = 0
         while page <= max_pages and not self._global_stop_reached():
             url = self._build_page_url(category_url, page)
             html = self._fetch_page_html(url)
@@ -166,10 +168,18 @@ class SiteCrawler:
                 if retry:
                     retry_records, has_data, limit_hit = retry
                     records.extend(retry_records)
-            if not has_data:
-                break
+            if has_data:
+                empty_pages_streak = 0
+                metrics.last_page = page
+            else:
+                empty_pages_streak += 1
+                if empty_pages_streak >= self._MAX_EMPTY_PAGES_STREAK:
+                    logger.info(
+                        "Достигнут лимит пустых страниц подряд, прерываем обход категории",
+                        extra={"site": self.site.name, "category_url": category_url, "page": page},
+                    )
+                    break
             start_offset = 0
-            metrics.last_page = page
             if limit_hit or self._should_stop(metrics):
                 break
             page += 1
@@ -181,6 +191,7 @@ class SiteCrawler:
         records: list[ProductRecord] = []
         max_pages = self.site.limits.max_pages or self.site.pagination.max_pages or 100
         page = 1
+        empty_pages_streak = 0
         while next_url and page <= max_pages and not self._global_stop_reached():
             html = self._fetch_page_html(next_url)
             page_records, has_data, limit_hit = self._process_html(
@@ -206,9 +217,17 @@ class SiteCrawler:
                 if retry:
                     retry_records, has_data, limit_hit = retry
                     records.extend(retry_records)
-            if not has_data:
-                break
-            metrics.last_page = page
+            if has_data:
+                empty_pages_streak = 0
+                metrics.last_page = page
+            else:
+                empty_pages_streak += 1
+                if empty_pages_streak >= self._MAX_EMPTY_PAGES_STREAK:
+                    logger.info(
+                        "Достигнут лимит пустых страниц подряд, прерываем обход категории",
+                        extra={"site": self.site.name, "category_url": category_url, "page": page},
+                    )
+                    break
             if limit_hit or self._should_stop(metrics):
                 break
             soup = BeautifulSoup(html, "lxml")

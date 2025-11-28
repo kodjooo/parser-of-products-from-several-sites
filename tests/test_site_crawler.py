@@ -17,9 +17,11 @@ from app.state.storage import CategoryState, StateStore
 class FakeEngine:
     def __init__(self, responses: dict[str, str]):
         self.responses = responses
+        self.calls: list[str] = []
 
     def fetch_html(self, request) -> str:
-        return self.responses[request.url]
+        self.calls.append(request.url)
+        return self.responses.get(request.url, "<div></div>")
 
     def shutdown(self) -> None:
         pass
@@ -433,6 +435,87 @@ def test_site_crawler_respects_end_page(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
     assert len(result.records) == 2
     assert store.get(site.name, str(site.category_urls[0])).last_page == 3
+    store.close()
+
+
+def test_site_crawler_continues_after_empty_pages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    config = _global_config(tmp_path)
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-empty-continue",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+    page1_html = """
+    <div class='product'><a href='https://demo.example/p/1'>1</a></div>
+    <div class='product'><a href='https://demo.example/p/2'>2</a></div>
+    """
+    page4_html = """
+    <div class='product'><a href='https://demo.example/p/4'>4</a></div>
+    """
+    responses = {
+        "https://demo.example/catalog/": page1_html,
+        "https://demo.example/catalog/?page=2": "<div></div>",
+        "https://demo.example/catalog/?page=3": "<div></div>",
+        "https://demo.example/catalog/?page=4": page4_html,
+        "https://demo.example/catalog/?page=5": "<div></div>",
+    }
+    fake_engine = FakeEngine(responses)
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: fake_engine)
+    monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: DummyContentFetcher())
+
+    crawler = SiteCrawler(context, site, flush_products=1)
+    result = crawler.crawl()
+
+    assert len(result.records) == 3
+    assert any("page=4" in call for call in fake_engine.calls)
+    store.close()
+
+
+def test_site_crawler_stops_after_three_empty_pages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    site.pagination.max_pages = 10
+    config = _global_config(tmp_path)
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-empty-stop",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+    page1_html = """
+    <div class='product'><a href='https://demo.example/p/1'>1</a></div>
+    """
+    responses = {
+        "https://demo.example/catalog/": page1_html,
+        "https://demo.example/catalog/?page=2": "<div></div>",
+        "https://demo.example/catalog/?page=3": "<div></div>",
+        "https://demo.example/catalog/?page=4": "<div></div>",
+        "https://demo.example/catalog/?page=5": """
+        <div class='product'><a href='https://demo.example/p/5'>5</a></div>
+        """,
+    }
+    fake_engine = FakeEngine(responses)
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: fake_engine)
+    monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: DummyContentFetcher())
+
+    crawler = SiteCrawler(context, site, flush_products=1)
+    result = crawler.crawl()
+
+    assert len(result.records) == 1
+    assert not any("page=5" in call for call in fake_engine.calls)
     store.close()
 
 
