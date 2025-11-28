@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,8 @@ class CategoryResult:
 
 class SiteCrawler:
     """Обходит все категории сайта и готовит результаты для записи."""
+
+    _EMPTY_CATEGORY_RETRY_DELAYS = (60, 600, 1200, 3600)
 
     def __init__(
         self,
@@ -145,9 +148,27 @@ class SiteCrawler:
                 save_progress=True,
             )
             records.extend(page_records)
-            start_offset = 0
+            start_offset_value = start_offset if page == start_page else 0
+            should_retry = (
+                not has_data
+                and metrics.total_found == 0
+                and page == start_page
+            )
+            if should_retry:
+                retry = self._retry_empty_category_page(
+                    url,
+                    category_url,
+                    page,
+                    metrics,
+                    start_offset=start_offset_value,
+                    save_progress=True,
+                )
+                if retry:
+                    retry_records, has_data, limit_hit = retry
+                    records.extend(retry_records)
             if not has_data:
                 break
+            start_offset = 0
             metrics.last_page = page
             if limit_hit or self._should_stop(metrics):
                 break
@@ -166,14 +187,29 @@ class SiteCrawler:
                 html, category_url, page, metrics
             )
             records.extend(page_records)
-            metrics.last_page = page
             self._persist_state(
                 category_url,
                 next_page=page + 1,
                 page_offset=0,
                 total=len(records),
             )
-            if not has_data or limit_hit or self._should_stop(metrics):
+            should_retry = not has_data and metrics.total_found == 0 and page == 1
+            if should_retry:
+                retry = self._retry_empty_category_page(
+                    next_url,
+                    category_url,
+                    page,
+                    metrics,
+                    start_offset=0,
+                    save_progress=False,
+                )
+                if retry:
+                    retry_records, has_data, limit_hit = retry
+                    records.extend(retry_records)
+            if not has_data:
+                break
+            metrics.last_page = page
+            if limit_hit or self._should_stop(metrics):
                 break
             soup = BeautifulSoup(html, "lxml")
             next_url = self._extract_next_link(soup, current_url=next_url)
@@ -181,9 +217,24 @@ class SiteCrawler:
         return CategoryResult(records=records, metrics=metrics)
 
     def _crawl_infinite_scroll(self, category_url: str) -> CategoryResult:
-        html = self._fetch_page_html(category_url, scroll_limit=self.site.limits.max_scrolls)
+        scroll_limit = self.site.limits.max_scrolls
+        html = self._fetch_page_html(category_url, scroll_limit=scroll_limit)
         metrics = CategoryMetrics(site_name=self.site.name, category_url=category_url)
-        records, has_data, _ = self._process_html(html, category_url, 1, metrics)
+        records, has_data, limit_hit = self._process_html(html, category_url, 1, metrics)
+        should_retry = not has_data and metrics.total_found == 0
+        if should_retry:
+            retry = self._retry_empty_category_page(
+                category_url,
+                category_url,
+                1,
+                metrics,
+                start_offset=0,
+                save_progress=False,
+                scroll_limit=scroll_limit,
+            )
+            if retry:
+                retry_records, has_data, limit_hit = retry
+                records.extend(retry_records)
         self._emit_pending(force=True)
         if has_data:
             metrics.last_page = 1
@@ -193,6 +244,8 @@ class SiteCrawler:
                 page_offset=0,
                 total=len(records),
             )
+        if limit_hit:
+            metrics.last_page = 1
         return CategoryResult(records=records, metrics=metrics)
 
     def _fetch_page_html(self, url: str, scroll_limit: int | None = None) -> str:
@@ -276,7 +329,8 @@ class SiteCrawler:
             return [], False, False
         links = self._extract_product_links(soup)
         logger.debug(
-            "Парсер категории нашёл ссылок",
+            "Парсер категории нашёл %s ссылок",
+            len(links),
             extra={"site": self.site.name, "page": page_num, "count": len(links)},
         )
         metrics.total_found += len(links)
@@ -417,6 +471,78 @@ class SiteCrawler:
                     total=metrics.total_written,
                 )
         return records, bool(records), limit_hit
+
+    def _retry_empty_category_page(
+        self,
+        page_url: str,
+        category_url: str,
+        page_num: int,
+        metrics: CategoryMetrics,
+        *,
+        start_offset: int,
+        save_progress: bool,
+        scroll_limit: int | None = None,
+    ) -> tuple[list[ProductRecord], bool, bool] | None:
+        for delay in self._EMPTY_CATEGORY_RETRY_DELAYS:
+            if self._global_stop_reached():
+                break
+            self._mark_last_proxy_for_retry()
+            logger.warning(
+                "Категория вернула 0 ссылок, попытка повторной загрузки через другой прокси",
+                extra={
+                    "site": self.site.name,
+                    "category_url": category_url,
+                    "page": page_num,
+                    "retry_delay_sec": delay,
+                },
+            )
+            self._wait_before_retry(delay)
+            html = self._fetch_page_html(page_url, scroll_limit=scroll_limit)
+            page_records, has_data, limit_hit = self._process_html(
+                html,
+                category_url,
+                page_num,
+                metrics,
+                start_offset=start_offset,
+                save_progress=save_progress,
+            )
+            if has_data:
+                return page_records, has_data, limit_hit
+        if self._global_stop_reached():
+            return None
+        logger.error(
+            "Категория осталась пустой после всех повторов",
+            extra={
+                "site": self.site.name,
+                "category_url": category_url,
+                "page": page_num,
+            },
+        )
+        return None
+
+    def _mark_last_proxy_for_retry(self) -> None:
+        marker = getattr(self.engine, "mark_last_proxy_bad", None)
+        if not callable(marker):
+            return
+        try:
+            marker(reason="empty_category_page")
+        except Exception:
+            logger.debug(
+                "Не удалось пометить последний прокси перед повторной попыткой",
+                extra={"site": self.site.name},
+                exc_info=True,
+            )
+
+    def _wait_before_retry(self, delay_sec: int) -> None:
+        logger.info(
+            "Ожидание перед повторной загрузкой категории",
+            extra={
+                "site": self.site.name,
+                "delay_sec": delay_sec,
+                "delay_min": round(delay_sec / 60, 2),
+            },
+        )
+        time.sleep(delay_sec)
 
     def _log_skipped_product(self, url: str, error: Exception | None) -> None:
         try:

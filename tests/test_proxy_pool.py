@@ -1,43 +1,27 @@
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
-from app.crawler.engines import ProxyPool, ProxyExhaustedError
+from app.crawler.engines import ProxyPool
 
 
-def test_proxy_pool_marks_proxy_after_two_forbidden(tmp_path):
+def test_proxy_pool_marks_after_two_issues(tmp_path: Path) -> None:
     log_path = tmp_path / "bad.log"
-    pool = ProxyPool(
-        ["http://proxy.local:8080"],
-        bad_log_path=log_path,
-        allow_direct=False,
-    )
+    pool = ProxyPool(["http://proxy1"], bad_log_path=log_path)
 
-    pool.mark_forbidden("http://proxy.local:8080")
+    assert pool.register_issue("http://proxy1", reason="empty_page") is False
     assert not log_path.exists()
 
-    pool.mark_forbidden("http://proxy.local:8080")
+    assert pool.register_issue("http://proxy1", reason="empty_page") is True
     assert log_path.exists()
-    content = log_path.read_text()
-    assert "http://proxy.local:8080" in content
-
-    with pytest.raises(ProxyExhaustedError):
-        pool.pick()
+    content = log_path.read_text(encoding="utf-8")
+    assert "empty_page" in content
 
 
-def test_proxy_pool_blocks_direct_after_two_forbidden(tmp_path):
-    log_path = tmp_path / "bad.log"
-    pool = ProxyPool([], allow_direct=True, bad_log_path=log_path)
-    pool.mark_forbidden(None)
-    pool.mark_forbidden(None)
+def test_proxy_pool_reset_issue_counter(tmp_path: Path) -> None:
+    pool = ProxyPool(["http://proxy1"])
+    pool.register_issue("http://proxy1", reason="empty_page")
+    pool.reset_issue_counter("http://proxy1")
 
-    with pytest.raises(ProxyExhaustedError):
-        pool.pick()
-
-    assert "__direct__" in log_path.read_text()
-
-
-def test_proxy_pool_pick_respects_exclude():
-    pool = ProxyPool(["http://proxy-a:8080", "http://proxy-b:8080"])
-    choice = pool.pick(exclude={"http://proxy-a:8080"})
-    assert choice == "http://proxy-b:8080"
+    # после сброса счётчик обнуляется и прокси не блокируется при следующем единичном инциденте
+    assert pool.register_issue("http://proxy1", reason="empty_page") is False

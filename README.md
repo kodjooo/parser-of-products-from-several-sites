@@ -120,7 +120,7 @@ source .venv/bin/activate && set -a && source .env && set +a && python -m app.ma
    ```bash
    docker build -t products-agent .
    ```
-3. Убедитесь, что рядом с проектом есть каталоги `config/sites`, `state`, `assets/images`, `secrets`, `logs`. Чтобы не создавать их вручную, выполните `python scripts/prepare_runtime_dirs.py` — скрипт автоматически создаст `state`, `assets/images`, `logs` (остальные каталоги всё равно нужно заполнить собственными данными). Пустая директория для логов создаётся один раз; при запуске в Docker она примонтируется в контейнер и будет использоваться как `NETWORK_BAD_PROXY_LOG_PATH` и `LOG_FILE_PATH`.
+3. Убедитесь, что рядом с проектом есть каталоги `config/sites`, `state`, `assets/images`, `secrets`, `logs`. Чтобы не создавать их вручную, выполните `python3 scripts/prepare_runtime_dirs.py` — скрипт автоматически создаст `state`, `assets/images`, `logs` (остальные каталоги всё равно нужно заполнить собственными данными). Пустая директория для логов создаётся один раз; при запуске в Docker она примонтируется в контейнер и будет использоваться как `NETWORK_BAD_PROXY_LOG_PATH` и `LOG_FILE_PATH`.
 4. Запускайте контейнер командой:
    ```bash
    docker run --rm \

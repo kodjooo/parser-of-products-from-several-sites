@@ -234,6 +234,127 @@ def test_site_crawler_skips_existing_products(monkeypatch: pytest.MonkeyPatch, t
     store.close()
 
 
+def test_site_crawler_retries_empty_category(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    config = _global_config(tmp_path)
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-1",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+
+    pages = [
+        "<div class='empty'></div>",
+        '<div class="product"><a href="https://demo.example/p/1">1</a></div>',
+    ]
+
+    def fake_fetch(self, url: str, scroll_limit=None) -> str:  # type: ignore[override]
+        if pages:
+            return pages.pop(0)
+        return "<div></div>"
+
+    wait_delays: list[int] = []
+
+    def fake_wait(self, delay: int) -> None:
+        wait_delays.append(delay)
+
+    class StubEngine:
+        def __init__(self) -> None:
+            self.mark_calls = 0
+
+        def fetch_html(self, request) -> str:  # pragma: no cover - не должен вызываться
+            raise AssertionError("fetch_html should be patched")
+
+        def shutdown(self) -> None:
+            pass
+
+        def mark_last_proxy_bad(self, reason=None) -> None:
+            self.mark_calls += 1
+
+    stub_engine = StubEngine()
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: stub_engine)
+    monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: DummyContentFetcher())
+    monkeypatch.setattr("app.crawler.site_crawler.SiteCrawler._fetch_page_html", fake_fetch)
+    monkeypatch.setattr("app.crawler.site_crawler.SiteCrawler._wait_before_retry", fake_wait)
+
+    crawler = SiteCrawler(context, site, flush_products=1)
+    result = crawler.crawl()
+
+    assert len(result.records) == 1
+    assert wait_delays == [60]
+    assert stub_engine.mark_calls == 1
+    store.close()
+
+
+def test_site_crawler_retries_empty_category_twice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    site = _site_config()
+    config = _global_config(tmp_path)
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-1",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+
+    pages = [
+        "<div class='empty'></div>",
+        "<section></section>",
+        '<div class="product"><a href="https://demo.example/p/1">1</a></div>',
+    ]
+
+    def fake_fetch(self, url: str, scroll_limit=None) -> str:  # type: ignore[override]
+        if pages:
+            return pages.pop(0)
+        return "<div></div>"
+
+    wait_delays: list[int] = []
+
+    def fake_wait(self, delay: int) -> None:
+        wait_delays.append(delay)
+
+    class StubEngine:
+        def __init__(self) -> None:
+            self.mark_calls = 0
+
+        def fetch_html(self, request) -> str:  # pragma: no cover
+            raise AssertionError("fetch_html should be patched")
+
+        def shutdown(self) -> None:
+            pass
+
+        def mark_last_proxy_bad(self, reason=None) -> None:
+            self.mark_calls += 1
+
+    stub_engine = StubEngine()
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: stub_engine)
+    monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: DummyContentFetcher())
+    monkeypatch.setattr("app.crawler.site_crawler.SiteCrawler._fetch_page_html", fake_fetch)
+    monkeypatch.setattr("app.crawler.site_crawler.SiteCrawler._wait_before_retry", fake_wait)
+
+    crawler = SiteCrawler(context, site, flush_products=1)
+    result = crawler.crawl()
+
+    assert len(result.records) == 1
+    assert wait_delays[:2] == [60, 600]
+    assert stub_engine.mark_calls == 2
+    store.close()
+
+
 def test_site_crawler_respects_start_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     site = _site_config()
     site.pagination.start_page = 3

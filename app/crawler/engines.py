@@ -52,6 +52,7 @@ class ProxyPool:
         self._forbidden_threshold = max(1, forbidden_threshold)
         self._forbidden_counts: dict[str, int] = {}
         self._direct_blocked = False
+        self._issue_counts: dict[str, int] = {}
 
     def pick(self, exclude: Iterable[str | None] | None = None) -> str | None:
         if self.override:
@@ -98,6 +99,25 @@ class ProxyPool:
         except Exception:  # pragma: no cover - запись логов не должна ронять процесс
             logger.warning("Не удалось записать файл испорченных прокси", extra={"path": str(self._bad_log_path)})
 
+    @property
+    def issue_threshold(self) -> int:
+        return self._forbidden_threshold
+
+    def register_issue(self, proxy: str | None, *, reason: str) -> bool:
+        key = self._make_key(proxy)
+        current = self._issue_counts.get(key, 0) + 1
+        self._issue_counts[key] = current
+        if current >= self._forbidden_threshold:
+            self.mark_bad(proxy, reason=reason, log=True)
+            self._issue_counts[key] = 0
+            return True
+        return False
+
+    def reset_issue_counter(self, proxy: str | None) -> None:
+        key = self._make_key(proxy)
+        if key in self._issue_counts:
+            del self._issue_counts[key]
+
 
 class HttpEngine:
     """HTTP-клиент для статичных страниц."""
@@ -117,6 +137,7 @@ class HttpEngine:
                 "follow_redirects": True,
             }
         )
+        self._last_proxy: str | None = None
 
     def _pick_proxy(self) -> str | None:
         return self._proxy_pool.pick()
@@ -133,6 +154,7 @@ class HttpEngine:
         for attempt in range(attempts):
             try:
                 proxy = self._pick_proxy()
+                self._last_proxy = proxy
             except ProxyExhaustedError as exc:
                 logger.error("Прокси-пул исчерпан", extra={"url": request.url})
                 raise RuntimeError(str(exc)) from exc
@@ -140,6 +162,7 @@ class HttpEngine:
                 client = self._client_factory.get(proxy)
                 response = client.get(request.url, headers=headers)
                 response.raise_for_status()
+                self._proxy_pool.reset_issue_counter(proxy)
                 return response.text
             except httpx.HTTPError as exc:
                 if isinstance(exc, httpx.HTTPStatusError):
@@ -158,6 +181,16 @@ class HttpEngine:
 
     def shutdown(self) -> None:
         self._client_factory.close()
+
+    def mark_last_proxy_bad(self, reason: str | None = None) -> None:
+        if self._last_proxy is None:
+            return
+        marked = self._proxy_pool.register_issue(
+            self._last_proxy,
+            reason=reason or "empty_category_page",
+        )
+        if marked:
+            self._last_proxy = None
 
 
 class BrowserEngine:
@@ -273,6 +306,7 @@ class BrowserEngine:
                 html = page.content()
                 self._last_proxy = proxy
                 used_proxies.add(proxy)
+                self._proxy_pool.reset_issue_counter(proxy)
                 if self._preview_delay_sec > 0:
                     logger.debug(
                         "Пауза перед закрытием страницы для предпросмотра",
@@ -380,6 +414,18 @@ class BrowserEngine:
             context.close()
         self._browser.close()
         self._playwright.stop()
+        self._contexts.clear()
+
+    def mark_last_proxy_bad(self, reason: str | None = None) -> None:
+        if self._last_proxy is None:
+            return
+        marked = self._proxy_pool.register_issue(
+            self._last_proxy,
+            reason=reason or "empty_category_page",
+        )
+        if marked:
+            self._dispose_context(self._last_proxy)
+            self._last_proxy = None
 
     def _get_or_create_context(self, proxy: str | None):
         key = proxy or "__direct__"
@@ -431,6 +477,8 @@ class BrowserEngine:
         context = self._contexts.pop(key, None)
         if context:
             context.close()
+        if proxy == self._last_proxy:
+            self._last_proxy = None
 
     def _build_default_headers(self) -> dict[str, str]:
         if not self.network.accept_language:
@@ -453,6 +501,7 @@ class BrowserEngine:
         if 0 <= extra_index < len(extra_waits):
             return float(extra_waits[extra_index])
         return quick_waits[-1] if quick_waits else 0.0
+
 
 
 class ProxyBannedError(Exception):
