@@ -7,6 +7,8 @@ import json
 import os
 import pytest
 
+from googleapiclient.errors import HttpError
+
 from app.config.models import GlobalConfig, SiteConfig
 from app.crawler.models import CategoryMetrics, ProductRecord, SiteCrawlResult
 from app.runtime import RuntimeContext
@@ -295,6 +297,94 @@ def test_retry_defaults_wait_10_and_20_minutes(tmp_path: Path, monkeypatch: pyte
 
     assert call_count["value"] == 3
     assert waits == [600.0, 1200.0]
+
+
+def _http_error(status: int = 500) -> HttpError:
+    response = type("Response", (), {"status": status, "reason": "internal"} )()
+    return HttpError(response, b"internal error")
+
+
+def _writer_with_default_site(tmp_path: Path) -> tuple[RuntimeContext, FakeSheetsClient, SheetsWriter, SiteConfig]:
+    config = _global_config(tmp_path)
+    context = RuntimeContext(
+        run_id="run-http-error",
+        started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        config=config,
+        sites=[],
+        state_store=StateStub(),  # type: ignore[arg-type]
+        dry_run=False,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+    )
+    secret_path = _service_account_json(tmp_path)
+    os.environ["GOOGLE_OAUTH_CLIENT_SECRET_PATH"] = str(secret_path)
+    os.environ["GOOGLE_OAUTH_TOKEN_PATH"] = str(tmp_path / "token.json")
+    os.environ["GOOGLE_OAUTH_SCOPES"] = "https://www.googleapis.com/auth/spreadsheets"
+    client = FakeSheetsClient()
+    writer = SheetsWriter(context, client=client, image_saver=FakeImageSaver())  # type: ignore[arg-type]
+    site = SiteConfig.model_validate(
+        {
+            "site": {"name": "demo", "domain": "demo.example"},
+            "selectors": {"product_link_selector": ".card a"},
+            "pagination": {"mode": "numbered_pages"},
+            "limits": {},
+            "category_urls": ["https://demo.example/catalog/"],
+        }
+    )
+    writer.prepare_site(site)
+    return context, client, writer, site
+
+
+def test_retry_internal_error_waits_1_10_20_minutes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, client, writer, site = _writer_with_default_site(tmp_path)
+    call_count = {"value": 0}
+    original_append = client.append_rows
+
+    def flaky(tab_name, rows):
+        call_count["value"] += 1
+        if call_count["value"] <= 3:
+            raise _http_error(500)
+        return original_append(tab_name, rows)
+
+    client.append_rows = flaky  # type: ignore[assignment]
+    waits: list[float] = []
+    monkeypatch.setattr("time.sleep", lambda value: waits.append(value))
+    record = ProductRecord(
+        source_site="demo.example",
+        category_url="https://demo.example/catalog/",
+        product_url="https://demo/p/internal",
+        run_id="run-http-error",
+    )
+
+    writer.append_site_records_with_retry(site, [record])
+
+    assert call_count["value"] == 4
+    assert waits == [60.0, 600.0, 1200.0]
+
+
+def test_retry_internal_error_stops_after_schedule(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, client, writer, site = _writer_with_default_site(tmp_path)
+    call_count = {"value": 0}
+
+    def always_fail(tab_name, rows):
+        call_count["value"] += 1
+        raise _http_error(500)
+
+    client.append_rows = always_fail  # type: ignore[assignment]
+    waits: list[float] = []
+    monkeypatch.setattr("time.sleep", lambda value: waits.append(value))
+    record = ProductRecord(
+        source_site="demo.example",
+        category_url="https://demo.example/catalog/",
+        product_url="https://demo/p/internal-fail",
+        run_id="run-http-error",
+    )
+
+    with pytest.raises(HttpError):
+        writer.append_site_records_with_retry(site, [record])
+
+    assert call_count["value"] == 4
+    assert waits == [60.0, 600.0, 1200.0]
 
 
 class DummySheetsAPI:

@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from collections.abc import Iterable, Sequence
 
+from googleapiclient.errors import HttpError
+
 from app.config.models import SiteConfig
 from app.crawler.models import ProductRecord, SiteCrawlResult
 from app.logger import get_logger
@@ -19,6 +21,8 @@ logger = get_logger(__name__)
 
 class SheetsWriter:
     """Отвечает за подготовку данных и запись в Google Sheets."""
+
+    _INTERNAL_ERROR_RETRY_DELAYS = [60.0, 600.0, 1200.0]
 
     SITE_HEADER = [
         "source_site",
@@ -146,11 +150,29 @@ class SheetsWriter:
         attempts = max(1, max_attempts)
         delay_schedule = self._resolve_delay_schedule(delay_sec, attempts)
         attempt = 1
+        internal_attempt = 0
         while True:
             try:
                 self.append_site_records(site, records)
                 return
-            except Exception:
+            except Exception as exc:
+                if self._is_internal_error(exc):
+                    if internal_attempt >= len(self._INTERNAL_ERROR_RETRY_DELAYS):
+                        raise
+                    wait = self._INTERNAL_ERROR_RETRY_DELAYS[internal_attempt]
+                    internal_attempt += 1
+                    logger.warning(
+                        "Google Sheets вернул 500, повторная попытка через %.1f сек",
+                        wait,
+                        extra={
+                            "site": site.name,
+                            "attempt": internal_attempt,
+                            "error": "sheets_internal",
+                        },
+                        exc_info=True,
+                    )
+                    time.sleep(wait)
+                    continue
                 if attempt >= attempts:
                     raise
                 wait = delay_schedule[attempt - 1]
@@ -254,6 +276,13 @@ class SheetsWriter:
         while len(base) < required:
             base.append(base[-1])
         return base[:required]
+
+    def _is_internal_error(self, exc: Exception) -> bool:
+        if not isinstance(exc, HttpError):
+            return False
+        response = getattr(exc, "resp", None)
+        status = getattr(response, "status", None)
+        return status == 500
 
     def _write_runs(self, results: list[SiteCrawlResult]) -> None:
         finished = datetime.now(timezone.utc).isoformat()
