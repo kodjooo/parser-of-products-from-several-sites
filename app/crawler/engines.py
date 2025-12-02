@@ -350,6 +350,7 @@ class BrowserEngine:
             default_timeout_sec=network.request_timeout_sec,
             extra_page_preview_sec=network.browser_extra_page_preview_sec,
         )
+        self._url_timeout_counts: dict[str, int] = {}
         self._preview_delay_sec = max(0.0, float(network.browser_preview_delay_sec or 0.0))
         self._preview_before_sec = max(
             0.0, float(network.browser_preview_before_behavior_sec or 0.0)
