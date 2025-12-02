@@ -25,3 +25,21 @@ def test_proxy_pool_reset_issue_counter(tmp_path: Path) -> None:
 
     # после сброса счётчик обнуляется и прокси не блокируется при следующем единичном инциденте
     assert pool.register_issue("http://proxy1", reason="empty_page") is False
+
+
+def test_proxy_pool_consecutive_errors_reset() -> None:
+    pool = ProxyPool(["http://proxy1"])
+    assert pool.increment_consecutive_error("http://proxy1", "ERR_TEST") == 1
+    assert pool.increment_consecutive_error("http://proxy1", "ERR_TEST") == 2
+    pool.reset_issue_counter("http://proxy1")
+    assert pool.increment_consecutive_error("http://proxy1", "ERR_TEST") == 1
+
+
+def test_proxy_pool_snapshot_counts() -> None:
+    pool = ProxyPool(["http://proxy1", "http://proxy2"], allow_direct=True)
+    pool.mark_bad("http://proxy1", reason="manual", log=False)
+    snapshot = pool.pool_snapshot()
+    assert snapshot["configured_proxies"] == 2
+    assert snapshot["total_sources"] == 3
+    assert snapshot["bad_proxies"] == 1
+    assert snapshot["allow_direct"] is True

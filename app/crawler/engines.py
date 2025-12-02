@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from urllib.parse import urlsplit
 from app.config.models import HumanBehaviorConfig, NetworkConfig, PaginationConfig, WaitCondition
 from app.crawler.behavior import BehaviorContext, HumanBehaviorController
 from app.logger import get_logger
+from app.monitoring import build_error_event
 from app.network.http_client_factory import HttpClientFactory
 
 logger = get_logger(__name__)
@@ -53,6 +55,9 @@ class ProxyPool:
         self._forbidden_counts: dict[str, int] = {}
         self._direct_blocked = False
         self._issue_counts: dict[str, int] = {}
+        self._consecutive_errors: dict[tuple[str, str], int] = {}
+        self._recent_issue_ts: deque[float] = deque()
+        self._issue_window_sec = 300
 
     def pick(self, exclude: Iterable[str | None] | None = None) -> str | None:
         if self.override:
@@ -75,6 +80,8 @@ class ProxyPool:
             self._direct_blocked = True
         else:
             return
+        self._note_issue_timestamp()
+        self._clear_consecutive_for_proxy(proxy)
         if log:
             self._write_bad_entry(key, reason)
 
@@ -107,6 +114,7 @@ class ProxyPool:
         key = self._make_key(proxy)
         current = self._issue_counts.get(key, 0) + 1
         self._issue_counts[key] = current
+        self._note_issue_timestamp()
         if current >= self._forbidden_threshold:
             self.mark_bad(proxy, reason=reason, log=True)
             self._issue_counts[key] = 0
@@ -117,6 +125,49 @@ class ProxyPool:
         key = self._make_key(proxy)
         if key in self._issue_counts:
             del self._issue_counts[key]
+        self._clear_consecutive_for_proxy(proxy)
+
+    def increment_consecutive_error(self, proxy: str | None, error_code: str) -> int:
+        key = (self._make_key(proxy), error_code)
+        current = self._consecutive_errors.get(key, 0) + 1
+        self._consecutive_errors[key] = current
+        return current
+
+    def pool_snapshot(self) -> dict[str, Any]:
+        active = max(0, len(self._proxies) - len(self._bad))
+        if self._allow_direct and not self._direct_blocked:
+            active += 1
+        direct_available = self._allow_direct and not self._direct_blocked
+        return {
+            "total_sources": len(self._proxies) + (1 if self._allow_direct else 0),
+            "configured_proxies": len(self._proxies),
+            "active_proxies": active,
+            "bad_proxies": len(self._bad),
+            "allow_direct": self._allow_direct,
+            "direct_blocked": self._direct_blocked,
+            "recent_issue_count_5m": self._recent_issue_count(self._issue_window_sec),
+            "has_direct_slot": direct_available,
+        }
+
+    def _clear_consecutive_for_proxy(self, proxy: str | None) -> None:
+        key = self._make_key(proxy)
+        for record_key in list(self._consecutive_errors.keys()):
+            if record_key[0] == key:
+                del self._consecutive_errors[record_key]
+
+    def _note_issue_timestamp(self) -> None:
+        now = time.time()
+        self._recent_issue_ts.append(now)
+        self._trim_recent_issues(self._issue_window_sec)
+
+    def _recent_issue_count(self, window_sec: int) -> int:
+        self._trim_recent_issues(window_sec)
+        return len(self._recent_issue_ts)
+
+    def _trim_recent_issues(self, window_sec: int) -> None:
+        threshold = time.time() - window_sec
+        while self._recent_issue_ts and self._recent_issue_ts[0] < threshold:
+            self._recent_issue_ts.popleft()
 
 
 class HttpEngine:
@@ -138,6 +189,7 @@ class HttpEngine:
             }
         )
         self._last_proxy: str | None = None
+        self._url_timeout_counts: dict[str, int] = {}
 
     def _pick_proxy(self) -> str | None:
         return self._proxy_pool.pick()
@@ -156,7 +208,14 @@ class HttpEngine:
                 proxy = self._pick_proxy()
                 self._last_proxy = proxy
             except ProxyExhaustedError as exc:
-                logger.error("Прокси-пул исчерпан", extra={"url": request.url})
+                event = build_error_event(
+                    error_type="proxy_pool_exhausted",
+                    error_source="app.crawler.engines.HttpEngine",
+                    url=request.url,
+                    action_required=["refresh_proxy_pool", "add_delay"],
+                    metadata=self._proxy_pool.pool_snapshot(),
+                )
+                logger.error("Прокси-пул исчерпан", extra={"url": request.url, "error_event": event})
                 raise RuntimeError(str(exc)) from exc
             try:
                 client = self._client_factory.get(proxy)
@@ -175,6 +234,10 @@ class HttpEngine:
                         "Ошибка HTTP, повтор с другим прокси",
                         extra={"url": request.url, "error": str(exc), "proxy": proxy},
                     )
+                else:
+                    self._handle_http_transport_error(
+                        exc, request.url, proxy, attempt + 1, attempts
+                    )
                 wait = backoff[min(attempt, len(backoff) - 1)]
                 time.sleep(wait)
         raise RuntimeError(f"Не удалось загрузить {request.url}")
@@ -191,6 +254,66 @@ class HttpEngine:
         )
         if marked:
             self._last_proxy = None
+
+    def _handle_http_transport_error(
+        self,
+        exc: httpx.HTTPError,
+        url: str,
+        proxy: str | None,
+        attempt: int,
+        total_attempts: int,
+    ) -> None:
+        extra = {
+            "url": url,
+            "proxy": proxy,
+            "attempt": attempt,
+            "max_attempts": total_attempts,
+        }
+        event: dict[str, Any] | None = None
+        if isinstance(exc, httpx.ConnectTimeout):
+            streak = self._proxy_pool.increment_consecutive_error(proxy, "CONNECT_TIMEOUT")
+            event = build_error_event(
+                error_type="ConnectTimeout",
+                error_source="httpcore.connection",
+                url=url,
+                proxy=proxy,
+                retry_index=attempt,
+                action_required=["change_proxy", "retry"],
+                metadata={
+                    "timeout_sec": self.timeout,
+                    "consecutive_errors_with_proxy": streak,
+                },
+            )
+            self._proxy_pool.mark_bad(proxy, reason="connect_timeout", log=True)
+        else:
+            cause = exc.__cause__
+            cause_text = str(cause or "")
+            if isinstance(exc, httpx.ProxyError) or "connect_tcp" in cause_text.lower() or "connectionrefusederror" in cause_text.lower():
+                streak = self._proxy_pool.increment_consecutive_error(proxy, "CONNECTION_REFUSED")
+                event = build_error_event(
+                    error_type="ConnectionRefusedError",
+                    error_source="httpcore.proxy_connection",
+                    url=url,
+                    proxy=proxy,
+                    retry_index=attempt,
+                    action_required=["change_proxy", "add_delay"],
+                    metadata={
+                        "failure_streak": streak,
+                        "raw_error": cause_text or str(exc),
+                    },
+                )
+                self._proxy_pool.mark_bad(proxy, reason="connection_refused", log=True)
+        if event:
+            logger.error(
+                "HTTP-соединение через прокси не установлено, повторяем с новым источником",
+                extra={**extra, "error_event": event},
+            )
+        else:
+            logger.warning(
+                "HTTP транспортная ошибка, повтор",
+                extra=extra,
+                exc_info=True,
+            )
 
 
 class BrowserEngine:
@@ -266,7 +389,17 @@ class BrowserEngine:
                 exclude = used_proxies if attempt >= quick_attempts else None
                 proxy = self._proxy_pool.pick(exclude=exclude)
             except ProxyExhaustedError as exc:
-                logger.error("Прокси-пул исчерпан в браузерном движке", extra={"url": request.url})
+                event = build_error_event(
+                    error_type="proxy_pool_exhausted",
+                    error_source="app.crawler.engines.BrowserEngine",
+                    url=request.url,
+                    action_required=["refresh_proxy_pool", "add_delay"],
+                    metadata=self._proxy_pool.pool_snapshot(),
+                )
+                logger.error(
+                    "Прокси-пул исчерпан в браузерном движке",
+                    extra={"url": request.url, "error_event": event},
+                )
                 raise RuntimeError(str(exc)) from exc
             context = self._get_or_create_context(proxy)
             page = context.new_page()
@@ -303,8 +436,9 @@ class BrowserEngine:
                     context=request.behavior_context,
                     meta=behavior_meta,
                 )
-                html = page.content()
+                html = self._read_page_content(page, request.url, proxy)
                 self._last_proxy = proxy
+                self._url_timeout_counts.pop(request.url, None)
                 used_proxies.add(proxy)
                 self._proxy_pool.reset_issue_counter(proxy)
                 if self._preview_delay_sec > 0:
@@ -328,6 +462,22 @@ class BrowserEngine:
             except self._timeout_error as exc:
                 used_proxies.add(proxy)
                 wait = self._compute_wait(attempt, quick_attempts, total_attempts, quick_waits, extra_waits)
+                timeout_count = self._url_timeout_counts.get(request.url, 0) + 1
+                self._url_timeout_counts[request.url] = timeout_count
+                event = build_error_event(
+                    error_type="net::ERR_TIMED_OUT",
+                    error_source="Playwright Page.goto",
+                    url=request.url,
+                    proxy=proxy,
+                    retry_index=attempt + 1,
+                    action_required=["retry", "increase_timeout", "change_proxy"],
+                    metadata={
+                        "timeout_sec": self.network.request_timeout_sec,
+                        "previous_timeouts": timeout_count - 1,
+                        "wait_before_retry_sec": wait,
+                        "extended_attempt": attempt >= quick_attempts,
+                    },
+                )
                 logger.warning(
                     "Timeout при загрузке страницы браузером, повтор",
                     extra={
@@ -337,6 +487,7 @@ class BrowserEngine:
                         "wait": wait,
                         "proxy": proxy,
                         "extended": attempt >= quick_attempts,
+                        "error_event": event,
                     },
                 )
                 if attempt == total_attempts - 1:
@@ -345,20 +496,30 @@ class BrowserEngine:
             except Exception as exc:
                 used_proxies.add(proxy)
                 wait = self._compute_wait(attempt, quick_attempts, total_attempts, quick_waits, extra_waits)
-                logger.warning(
-                    "Ошибка Playwright при загрузке страницы, смена прокси",
-                    extra={
-                        "url": request.url,
-                        "proxy": proxy,
-                        "attempt": attempt + 1,
-                        "max_attempts": total_attempts,
-                        "extended": attempt >= quick_attempts,
-                        "wait": wait,
-                    },
-                    exc_info=True,
+                handled = self._handle_playwright_exception(
+                    exc,
+                    request.url,
+                    proxy,
+                    attempt,
+                    total_attempts,
+                    wait,
+                    extended=attempt >= quick_attempts,
                 )
-                self._proxy_pool.mark_bad(proxy)
-                self._dispose_context(proxy)
+                if not handled:
+                    logger.warning(
+                        "Ошибка Playwright при загрузке страницы, смена прокси",
+                        extra={
+                            "url": request.url,
+                            "proxy": proxy,
+                            "attempt": attempt + 1,
+                            "max_attempts": total_attempts,
+                            "extended": attempt >= quick_attempts,
+                            "wait": wait,
+                        },
+                        exc_info=True,
+                    )
+                    self._proxy_pool.mark_bad(proxy)
+                    self._dispose_context(proxy)
                 if attempt == total_attempts - 1:
                     raise RuntimeError(f"Не удалось загрузить {request.url}") from exc
                 time.sleep(wait)
@@ -485,6 +646,117 @@ class BrowserEngine:
             return {}
         return {"Accept-Language": self.network.accept_language}
 
+    def _read_page_content(self, page, url: str, proxy: str | None) -> str:
+        try:
+            return page.content()
+        except Exception as exc:
+            message = str(exc)
+            if "Page.content: Unable to retrieve content because the page is navigating" not in message:
+                raise
+            jitter = random.uniform(0.5, 1.0)
+            event = build_error_event(
+                error_type="Page.content:navigating",
+                error_source="Playwright Page.content",
+                url=url,
+                proxy=proxy,
+                action_required=["wait_for_networkidle", "retry"],
+                metadata={"retry_delay_sec": round(jitter, 2)},
+            )
+            logger.warning(
+                "Playwright не дождался завершения навигации перед чтением контента, повтор",
+                extra={
+                    "url": url,
+                    "proxy": proxy,
+                    "retry_delay_sec": round(jitter, 2),
+                    "error_event": event,
+                },
+            )
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(jitter * 1000)
+            return page.content()
+
+    def _handle_playwright_exception(
+        self,
+        exc: Exception,
+        url: str,
+        proxy: str | None,
+        attempt: int,
+        total_attempts: int,
+        wait: float,
+        *,
+        extended: bool,
+    ) -> bool:
+        message = str(exc)
+        extra_base = {
+            "url": url,
+            "proxy": proxy,
+            "attempt": attempt + 1,
+            "max_attempts": total_attempts,
+            "wait": wait,
+            "extended": extended,
+        }
+        if "ERR_PROXY_CONNECTION_FAILED" in message:
+            streak = self._proxy_pool.increment_consecutive_error(proxy, "ERR_PROXY_CONNECTION_FAILED")
+            event = build_error_event(
+                error_type="net::ERR_PROXY_CONNECTION_FAILED",
+                error_source="Playwright Page.goto",
+                url=url,
+                proxy=proxy,
+                retry_index=attempt + 1,
+                action_required="change_proxy",
+                metadata={"consecutive_errors_with_proxy": streak, "wait_before_retry_sec": wait},
+            )
+            logger.error(
+                "Playwright не может подключиться через прокси, исключаем его",
+                extra={**extra_base, "error_event": event},
+            )
+            self._proxy_pool.mark_bad(proxy, reason="ERR_PROXY_CONNECTION_FAILED", log=True)
+            self._dispose_context(proxy)
+            return True
+        if "ERR_SOCKET_NOT_CONNECTED" in message:
+            streak = self._proxy_pool.increment_consecutive_error(proxy, "ERR_SOCKET_NOT_CONNECTED")
+            event = build_error_event(
+                error_type="net::ERR_SOCKET_NOT_CONNECTED",
+                error_source="Playwright Page.goto",
+                url=url,
+                proxy=proxy,
+                retry_index=attempt + 1,
+                action_required=["retry", "change_proxy", "add_delay"],
+                metadata={"consecutive_errors_with_proxy": streak, "wait_before_retry_sec": wait},
+            )
+            logger.error(
+                "Playwright сообщает ERR_SOCKET_NOT_CONNECTED, пробуем другой прокси",
+                extra={**extra_base, "error_event": event},
+            )
+            self._proxy_pool.mark_bad(proxy, reason="ERR_SOCKET_NOT_CONNECTED", log=True)
+            self._dispose_context(proxy)
+            return True
+        if "net::ERR_TIMED_OUT" in message:
+            streak = self._proxy_pool.increment_consecutive_error(proxy, "ERR_TIMED_OUT")
+            event = build_error_event(
+                error_type="net::ERR_TIMED_OUT",
+                error_source="Playwright Page.goto",
+                url=url,
+                proxy=proxy,
+                retry_index=attempt + 1,
+                action_required=["retry", "increase_timeout", "change_proxy"],
+                metadata={
+                    "timeout_sec": self.network.request_timeout_sec,
+                    "consecutive_errors_with_proxy": streak,
+                    "wait_before_retry_sec": wait,
+                },
+            )
+            logger.warning(
+                "Playwright сообщает net::ERR_TIMED_OUT, увеличиваем ожидание и меняем прокси",
+                extra={**extra_base, "error_event": event},
+            )
+            self._proxy_pool.mark_bad(proxy, reason="ERR_TIMED_OUT", log=True)
+            self._dispose_context(proxy)
+            return True
+        if isinstance(exc, ProxyBannedError):
+            # Уже обработано в отдельном блоке
+            return False
+        return False
     @staticmethod
     def _compute_wait(
         attempt_index: int,

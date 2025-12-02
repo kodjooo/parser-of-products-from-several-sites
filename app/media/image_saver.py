@@ -12,6 +12,7 @@ from app.crawler.engines import ProxyPool, ProxyExhaustedError
 from app.crawler.utils import pick_user_agent
 from app.logger import get_logger
 from app.network.http_client_factory import HttpClientFactory
+from app.monitoring import build_error_event
 
 logger = get_logger(__name__)
 
@@ -39,7 +40,17 @@ class ImageSaver:
                 try:
                     proxy_to_use = self._proxy_pool.pick()
                 except ProxyExhaustedError:
-                    logger.error("Прокси-пул исчерпан для загрузки изображения", extra={"url": url})
+                    event = build_error_event(
+                        error_type="proxy_pool_exhausted",
+                        error_source="app.media.image_saver",
+                        url=url,
+                        action_required=["refresh_proxy_pool", "add_delay"],
+                        metadata=self._proxy_pool.pool_snapshot() if self._proxy_pool else None,
+                    )
+                    logger.error(
+                        "Прокси-пул исчерпан для загрузки изображения",
+                        extra={"url": url, "error_event": event},
+                    )
                     proxy_to_use = None
             client = self._client_factory.get(proxy_to_use)
             response = client.get(

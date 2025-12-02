@@ -16,6 +16,7 @@ from app.crawler.utils import pick_user_agent
 from app.media.image_saver import ImageSaver
 from app.logger import get_logger
 from app.network.http_client_factory import HttpClientFactory
+from app.monitoring import build_error_event
 
 logger = get_logger(__name__)
 
@@ -152,7 +153,17 @@ class ProductContentFetcher:
             try:
                 proxy = self._proxy_pool.pick()
             except ProxyExhaustedError:
-                logger.error("Прокси-пул исчерпан для HTTP-загрузки", extra={"url": product_url})
+                event = build_error_event(
+                    error_type="proxy_pool_exhausted",
+                    error_source="app.crawler.content_fetcher",
+                    url=product_url,
+                    action_required=["refresh_proxy_pool", "add_delay"],
+                    metadata=self._proxy_pool.pool_snapshot(),
+                )
+                logger.error(
+                    "Прокси-пул исчерпан для HTTP-загрузки",
+                    extra={"url": product_url, "error_event": event},
+                )
                 return None, None
             client = self._http_client_factory.get(proxy)
             response = client.get(
