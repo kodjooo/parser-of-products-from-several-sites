@@ -43,3 +43,13 @@ def test_proxy_pool_snapshot_counts() -> None:
     assert snapshot["total_sources"] == 3
     assert snapshot["bad_proxies"] == 1
     assert snapshot["allow_direct"] is True
+
+
+def test_proxy_pool_reuses_direct_connection_when_excluded() -> None:
+    pool = ProxyPool([], allow_direct=True)
+    first_pick = pool.pick()
+    assert first_pick is None
+
+    # даже если direct уже в exclude, повторный вызов не падает и возвращает доступный источник
+    second_pick = pool.pick(exclude={None})
+    assert second_pick is None

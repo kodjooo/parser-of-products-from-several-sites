@@ -65,12 +65,18 @@ class ProxyPool:
         if not self._has_pool and not self._allow_direct:
             return None
         excluded = set(exclude or [])
-        candidates = [proxy for proxy in self._proxies if proxy not in self._bad and proxy not in excluded]
-        if self._allow_direct and not self._direct_blocked and (None not in excluded):
-            candidates.append(None)
+        candidates = self._collect_candidates(excluded)
+        if not candidates and excluded:
+            candidates = self._collect_candidates(set())
         if not candidates:
             raise ProxyExhaustedError("Все прокси из пула помечены как недоступные")
         return random.choice(candidates)
+
+    def _collect_candidates(self, excluded: set[str | None]) -> list[str | None]:
+        candidates = [proxy for proxy in self._proxies if proxy not in self._bad and proxy not in excluded]
+        if self._allow_direct and not self._direct_blocked and (None not in excluded):
+            candidates.append(None)
+        return candidates
 
     def mark_bad(self, proxy: str | None, *, reason: str | None = None, log: bool = False) -> None:
         key = self._make_key(proxy)
