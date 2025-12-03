@@ -2,6 +2,7 @@ services:
   parser:
     build: .
     image: products-agent
+    restart: always
     env_file:
       - .env
     volumes:
