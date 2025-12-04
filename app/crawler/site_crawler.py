@@ -142,7 +142,19 @@ class SiteCrawler:
         empty_pages_streak = 0
         while page <= max_pages and not self._global_stop_reached():
             url = self._build_page_url(category_url, page)
-            html = self._fetch_page_html(url)
+            try:
+                html = self._fetch_page_html(url)
+            except Exception as exc:
+                self._handle_category_page_exception(
+                    category_url,
+                    page,
+                    metrics,
+                    exc,
+                    advance_page=True,
+                )
+                page += 1
+                start_offset = 0
+                continue
             page_records, has_data, limit_hit = self._process_html(
                 html,
                 category_url,
@@ -195,7 +207,17 @@ class SiteCrawler:
         page = 1
         empty_pages_streak = 0
         while next_url and page <= max_pages and not self._global_stop_reached():
-            html = self._fetch_page_html(next_url)
+            try:
+                html = self._fetch_page_html(next_url)
+            except Exception as exc:
+                self._handle_category_page_exception(
+                    category_url,
+                    page,
+                    metrics,
+                    exc,
+                    advance_page=False,
+                )
+                break
             page_records, has_data, limit_hit = self._process_html(
                 html, category_url, page, metrics
             )
@@ -239,8 +261,18 @@ class SiteCrawler:
 
     def _crawl_infinite_scroll(self, category_url: str) -> CategoryResult:
         scroll_limit = self.site.limits.max_scrolls
-        html = self._fetch_page_html(category_url, scroll_limit=scroll_limit)
         metrics = CategoryMetrics(site_name=self.site.name, category_url=category_url)
+        try:
+            html = self._fetch_page_html(category_url, scroll_limit=scroll_limit)
+        except Exception as exc:
+            self._handle_category_page_exception(
+                category_url,
+                1,
+                metrics,
+                exc,
+                advance_page=False,
+            )
+            return CategoryResult(records=[], metrics=metrics)
         records, has_data, limit_hit = self._process_html(html, category_url, 1, metrics)
         should_retry = not has_data and metrics.total_found == 0
         if should_retry:
@@ -520,7 +552,17 @@ class SiteCrawler:
                 },
             )
             self._wait_before_retry(delay)
-            html = self._fetch_page_html(page_url, scroll_limit=scroll_limit)
+            try:
+                html = self._fetch_page_html(page_url, scroll_limit=scroll_limit)
+            except Exception as exc:
+                self._handle_category_page_exception(
+                    category_url,
+                    page_num,
+                    metrics,
+                    exc,
+                    advance_page=False,
+                )
+                continue
             page_records, has_data, limit_hit = self._process_html(
                 html,
                 category_url,
@@ -542,6 +584,44 @@ class SiteCrawler:
             },
         )
         return None
+
+    def _handle_category_page_exception(
+        self,
+        category_url: str,
+        page_num: int,
+        metrics: CategoryMetrics,
+        exc: Exception,
+        *,
+        advance_page: bool,
+    ) -> None:
+        logger.error(
+            "Не удалось загрузить страницу категории, переходим к следующей",
+            extra={
+                "site": self.site.name,
+                "category_url": category_url,
+                "page": page_num,
+            },
+            exc_info=True,
+        )
+        self._mark_last_proxy_for_retry()
+        if advance_page:
+            try:
+                self._persist_state(
+                    category_url,
+                    next_page=page_num + 1,
+                    page_offset=0,
+                    total=metrics.total_written,
+                )
+            except Exception:
+                logger.warning(
+                    "Не удалось сохранить прогресс категории после ошибки страницы",
+                    extra={
+                        "site": self.site.name,
+                        "category_url": category_url,
+                        "page": page_num,
+                    },
+                    exc_info=True,
+                )
 
     def _mark_last_proxy_for_retry(self) -> None:
         marker = getattr(self.engine, "mark_last_proxy_bad", None)
