@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, Callable, Iterable, Protocol
 
 import httpx
 from urllib.parse import urlsplit
@@ -44,20 +44,25 @@ class ProxyPool:
         allow_direct: bool = False,
         bad_log_path: Path | None = None,
         forbidden_threshold: int = 2,
+        revive_after_sec: float = 1800.0,
+        time_provider: Callable[[], float] | None = None,
     ):
         self.override = override
         self._proxies = proxies or []
-        self._bad: set[str] = set()
         self._has_pool = bool(self._proxies)
         self._allow_direct = allow_direct
         self._bad_log_path = bad_log_path
         self._forbidden_threshold = max(1, forbidden_threshold)
         self._forbidden_counts: dict[str, int] = {}
-        self._direct_blocked = False
         self._issue_counts: dict[str, int] = {}
         self._consecutive_errors: dict[tuple[str, str], int] = {}
         self._recent_issue_ts: deque[float] = deque()
         self._issue_window_sec = 300
+        self._revive_after_sec = max(0.0, revive_after_sec)
+        self._time_provider = time_provider or time.time
+        self._blocked_until: dict[str, float | None] = {}
+        self._direct_blocked = False
+        self._direct_blocked_until: float | None = None
 
     def pick(self, exclude: Iterable[str | None] | None = None) -> str | None:
         if self.override:
@@ -73,17 +78,23 @@ class ProxyPool:
         return random.choice(candidates)
 
     def _collect_candidates(self, excluded: set[str | None]) -> list[str | None]:
-        candidates = [proxy for proxy in self._proxies if proxy not in self._bad and proxy not in excluded]
-        if self._allow_direct and not self._direct_blocked and (None not in excluded):
+        self._prune_expired_blocks()
+        candidates = [
+            proxy
+            for proxy in self._proxies
+            if proxy not in excluded and not self._is_proxy_blocked(proxy)
+        ]
+        if self._allow_direct and not self._is_direct_blocked() and (None not in excluded):
             candidates.append(None)
         return candidates
 
     def mark_bad(self, proxy: str | None, *, reason: str | None = None, log: bool = False) -> None:
         key = self._make_key(proxy)
         if proxy and not self.override and self._has_pool:
-            self._bad.add(proxy)
+            self._blocked_until[proxy] = self._compute_block_expiration()
         elif proxy is None and self._allow_direct:
             self._direct_blocked = True
+            self._direct_blocked_until = self._compute_block_expiration()
         else:
             return
         self._note_issue_timestamp()
@@ -132,6 +143,7 @@ class ProxyPool:
         if key in self._issue_counts:
             del self._issue_counts[key]
         self._clear_consecutive_for_proxy(proxy)
+        self._recover_source(proxy)
 
     def increment_consecutive_error(self, proxy: str | None, error_code: str) -> int:
         key = (self._make_key(proxy), error_code)
@@ -140,19 +152,21 @@ class ProxyPool:
         return current
 
     def pool_snapshot(self) -> dict[str, Any]:
-        active = max(0, len(self._proxies) - len(self._bad))
-        if self._allow_direct and not self._direct_blocked:
+        self._prune_expired_blocks()
+        active = max(0, len(self._proxies) - len(self._blocked_until))
+        if self._allow_direct and not self._is_direct_blocked():
             active += 1
-        direct_available = self._allow_direct and not self._direct_blocked
+        direct_available = self._allow_direct and not self._is_direct_blocked()
         return {
             "total_sources": len(self._proxies) + (1 if self._allow_direct else 0),
             "configured_proxies": len(self._proxies),
             "active_proxies": active,
-            "bad_proxies": len(self._bad),
+            "bad_proxies": len(self._blocked_until),
             "allow_direct": self._allow_direct,
-            "direct_blocked": self._direct_blocked,
+            "direct_blocked": self._is_direct_blocked(),
             "recent_issue_count_5m": self._recent_issue_count(self._issue_window_sec),
             "has_direct_slot": direct_available,
+            "proxy_revive_after_sec": self._revive_after_sec,
         }
 
     def _clear_consecutive_for_proxy(self, proxy: str | None) -> None:
@@ -162,7 +176,7 @@ class ProxyPool:
                 del self._consecutive_errors[record_key]
 
     def _note_issue_timestamp(self) -> None:
-        now = time.time()
+        now = self._now()
         self._recent_issue_ts.append(now)
         self._trim_recent_issues(self._issue_window_sec)
 
@@ -171,9 +185,53 @@ class ProxyPool:
         return len(self._recent_issue_ts)
 
     def _trim_recent_issues(self, window_sec: int) -> None:
-        threshold = time.time() - window_sec
+        threshold = self._now() - window_sec
         while self._recent_issue_ts and self._recent_issue_ts[0] < threshold:
             self._recent_issue_ts.popleft()
+
+    def _compute_block_expiration(self) -> float | None:
+        if self._revive_after_sec <= 0:
+            return None
+        return self._now() + self._revive_after_sec
+
+    def _prune_expired_blocks(self) -> None:
+        if not self._blocked_until:
+            return
+        now = self._now()
+        for proxy, expires_at in list(self._blocked_until.items()):
+            if expires_at is not None and expires_at <= now:
+                del self._blocked_until[proxy]
+
+    def _is_proxy_blocked(self, proxy: str) -> bool:
+        expires_at = self._blocked_until.get(proxy)
+        if expires_at is None:
+            return proxy in self._blocked_until
+        if expires_at <= self._now():
+            del self._blocked_until[proxy]
+            return False
+        return True
+
+    def _is_direct_blocked(self) -> bool:
+        if not self._direct_blocked:
+            return False
+        if self._direct_blocked_until is None:
+            return True
+        if self._direct_blocked_until <= self._now():
+            self._direct_blocked = False
+            self._direct_blocked_until = None
+            return False
+        return True
+
+    def _recover_source(self, proxy: str | None) -> None:
+        if proxy is None:
+            if self._allow_direct:
+                self._direct_blocked = False
+                self._direct_blocked_until = None
+            return
+        self._blocked_until.pop(proxy, None)
+
+    def _now(self) -> float:
+        return float(self._time_provider())
 
 
 class HttpEngine:
@@ -186,6 +244,7 @@ class HttpEngine:
             proxy_override,
             allow_direct=network.proxy_allow_direct,
             bad_log_path=network.bad_proxy_log_path,
+            revive_after_sec=network.proxy_revive_after_sec,
         )
         self.timeout = network.request_timeout_sec
         self._client_factory = HttpClientFactory(
@@ -340,6 +399,7 @@ class BrowserEngine:
             network.proxy_pool,
             allow_direct=network.proxy_allow_direct,
             bad_log_path=network.bad_proxy_log_path,
+            revive_after_sec=network.proxy_revive_after_sec,
         )
         self._playwright = sync_playwright().start()
         slow_mo_ms = int(network.browser_slow_mo_ms or 0)

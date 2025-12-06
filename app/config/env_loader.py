@@ -55,10 +55,14 @@ def load_global_config_from_env() -> GlobalConfig:
     headless_flag = _bool("NETWORK_BROWSER_HEADLESS", default=True)
     if headless_flag is None:
         headless_flag = True
+    revive_minutes = _float("NETWORK_PROXY_REVIVE_AFTER_MINUTES", default=30.0)
+    if revive_minutes is None:
+        revive_minutes = 30.0
     network = NetworkConfig(
         user_agents=_list_required("NETWORK_USER_AGENTS"),
         proxy_pool=_list("NETWORK_PROXY_POOL"),
         proxy_allow_direct=_bool("NETWORK_PROXY_ALLOW_DIRECT", default=False) or False,
+        proxy_revive_after_sec=max(0.0, revive_minutes * 60.0),
         request_timeout_sec=_float("NETWORK_REQUEST_TIMEOUT_SEC", default=30.0),
         retry=RetryPolicy(
             max_attempts=_int("NETWORK_RETRY_MAX_ATTEMPTS", default=3),

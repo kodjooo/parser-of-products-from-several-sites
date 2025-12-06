@@ -56,6 +56,7 @@ class ProductContentFetcher:
             network.proxy_pool,
             allow_direct=network.proxy_allow_direct,
             bad_log_path=network.bad_proxy_log_path,
+            revive_after_sec=network.proxy_revive_after_sec,
         )
         if fetch_engine == "browser":
             if shared_browser_engine is not None:
@@ -172,6 +173,7 @@ class ProductContentFetcher:
             )
             response.raise_for_status()
             logger.debug("HTTP fetch product url=%s proxy=%s ua=%s", product_url, proxy, ua)
+            self._proxy_pool.reset_issue_counter(proxy)
         except httpx.HTTPError as exc:
             if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 403 and self._proxy_pool:
                 self._proxy_pool.mark_forbidden(proxy)

@@ -59,6 +59,8 @@ class ImageSaver:
             )
             response.raise_for_status()
             logger.debug("Image download via httpx url=%s proxy=%s", url, proxy_to_use)
+            if self._proxy_pool:
+                self._proxy_pool.reset_issue_counter(proxy_to_use)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 403 and self._proxy_pool:
                 self._proxy_pool.mark_forbidden(proxy_to_use)

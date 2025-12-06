@@ -31,6 +31,7 @@ class NetworkConfig(BaseModel):
     user_agents: list[str]
     proxy_pool: list[str] = Field(default_factory=list)
     proxy_allow_direct: bool = False
+    proxy_revive_after_sec: float = Field(default=1800.0, ge=0.0)
     request_timeout_sec: float = Field(default=30, gt=0)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
     browser_storage_state_path: Path | None = None
