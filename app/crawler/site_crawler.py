@@ -75,6 +75,7 @@ class SiteCrawler:
             base_path = Path("state/runtime.db")
         self._skipped_log_path = base_path.with_name("skipped_products.log")
         self._duplicates_log_path = base_path.with_name("duplicate_products.log")
+        self._skipped_categories_log_path = base_path.with_name("skipped_categories.log")
         logger.debug(
             "SiteCrawler инициализирован: flush_callback=%s, flush_products=%s",
             bool(self.flush_callback),
@@ -583,6 +584,7 @@ class SiteCrawler:
                 "page": page_num,
             },
         )
+        self._log_skipped_category(category_url, page_num, reason="empty_after_retries")
         return None
 
     def _handle_category_page_exception(
@@ -602,6 +604,11 @@ class SiteCrawler:
                 "page": page_num,
             },
             exc_info=True,
+        )
+        self._log_skipped_category(
+            category_url,
+            page_num,
+            reason=f"exception:{exc.__class__.__name__}",
         )
         self._mark_last_proxy_for_retry()
         if advance_page:
@@ -671,6 +678,25 @@ class SiteCrawler:
             logger.error(
                 "Не удалось записать лог дубликатов",
                 extra={"url": url, "error": str(exc)},
+            )
+
+    def _log_skipped_category(self, category_url: str, page: int, reason: str) -> None:
+        try:
+            self._skipped_categories_log_path.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).isoformat()
+            with self._skipped_categories_log_path.open("a", encoding="utf-8") as dump:
+                dump.write(
+                    f"{timestamp} site={self.site.name} page={page} url={category_url} reason={reason}\n"
+                )
+        except Exception as exc:  # pragma: no cover - ошибки логирования не критичны
+            logger.error(
+                "Не удалось записать лог пропущенной категории",
+                extra={
+                    "site": self.site.name,
+                    "category_url": category_url,
+                    "page": page,
+                    "error": str(exc),
+                },
             )
 
     def _should_stop_on_missing_selector(self, soup: BeautifulSoup) -> bool:

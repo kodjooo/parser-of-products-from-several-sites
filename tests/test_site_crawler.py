@@ -8,7 +8,7 @@ import pytest
 
 from app.config.models import GlobalConfig, SiteConfig
 from app.crawler.content_fetcher import ProductContent
-from app.crawler.models import ProductRecord
+from app.crawler.models import CategoryMetrics, ProductRecord
 from app.crawler.site_crawler import SiteCrawler
 from app.runtime import RuntimeContext
 from app.state.storage import CategoryState, StateStore
@@ -572,4 +572,89 @@ def test_site_crawler_resumes_from_last_product(monkeypatch: pytest.MonkeyPatch,
     saved_state = store.get(site.name, category)
     assert saved_state.last_page == 3
     assert saved_state.last_offset == 0
+    store.close()
+
+
+def test_site_crawler_logs_failed_category(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    site.pagination.max_pages = 1
+    config = _global_config(tmp_path)
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-failed-category",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+
+    class ErrorEngine:
+        def fetch_html(self, request) -> str:
+            raise RuntimeError("boom")
+
+        def shutdown(self) -> None:  # pragma: no cover - ничего не делает
+            pass
+
+        def mark_last_proxy_bad(self, reason=None) -> None:  # pragma: no cover
+            pass
+
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: ErrorEngine())
+    monkeypatch.setattr(
+        "app.crawler.site_crawler.ProductContentFetcher",
+        lambda *args, **kwargs: DummyContentFetcher(),
+    )
+
+    crawler = SiteCrawler(context, site, flush_products=1)
+    result = crawler.crawl()
+
+    assert not result.records
+    log_path = Path(config.state.database).with_name("skipped_categories.log")
+    assert log_path.exists()
+    content = log_path.read_text(encoding="utf-8")
+    assert "reason=exception:RuntimeError" in content
+    assert str(site.category_urls[0]) in content
+    store.close()
+
+
+def test_site_crawler_logs_empty_category_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    config = _global_config(tmp_path)
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-empty-category",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+    crawler = SiteCrawler(context, site, flush_products=1)
+
+    monkeypatch.setattr(
+        "app.crawler.site_crawler.SiteCrawler._EMPTY_CATEGORY_RETRY_DELAYS",
+        tuple(),
+    )
+
+    metrics = CategoryMetrics(site_name=site.name, category_url=str(site.category_urls[0]))
+    crawler._retry_empty_category_page(  # type: ignore[arg-type]
+        page_url=str(site.category_urls[0]),
+        category_url=str(site.category_urls[0]),
+        page_num=1,
+        metrics=metrics,
+        start_offset=0,
+        save_progress=False,
+        scroll_limit=None,
+    )
+
+    log_path = Path(config.state.database).with_name("skipped_categories.log")
+    assert log_path.exists()
+    content = log_path.read_text(encoding="utf-8")
+    assert "reason=empty_after_retries" in content
     store.close()
