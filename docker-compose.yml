@@ -14,4 +14,14 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    command: ["python", "-m", "app.main"]
+    command:
+      [
+        "python",
+        "-m",
+        "app.main",
+        "watch",
+        "--success-delay",
+        "300",
+        "--error-delay",
+        "120",
+      ]
