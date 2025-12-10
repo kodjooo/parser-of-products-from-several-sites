@@ -125,11 +125,20 @@ def test_state_path_defaults_follow_run_env(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("APP_RUN_ENV", "docker")
     docker_config = load_global_config(None)
     assert str(docker_config.state.database) == "/var/app/state/runtime.db"
-    assert docker_config.network.browser_storage_state_path is None
+    docker_default_storage = Path("/secrets/auth.json")
+    if docker_config.network.browser_storage_state_path is None:
+        assert not docker_default_storage.exists()
+    else:
+        assert docker_config.network.browser_storage_state_path == docker_default_storage
 
     monkeypatch.setenv("APP_RUN_ENV", "local")
     local_config = load_global_config(None)
     assert str(local_config.state.database) == "state/runtime.db"
+    local_default_storage = Path("secrets/auth.json")
+    if local_config.network.browser_storage_state_path is None:
+        assert not local_default_storage.exists()
+    else:
+        assert local_config.network.browser_storage_state_path == local_default_storage
 def test_iter_site_configs_supports_multiple_files(tmp_path: Path) -> None:
     (tmp_path / "first.yml").write_text(
         yaml.safe_dump(_site_payload("first")), encoding="utf-8"
