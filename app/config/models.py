@@ -216,6 +216,10 @@ class SelectorConfig(BaseModel):
             "Селекторы элементов, после которых (включая их) текст товара нужно обрезать"
         ),
     )
+    content_exclude_selectors: list[str] = Field(
+        default_factory=list,
+        description="Селекторы блоков, которые нужно удалить из текста, не обрезая всё остальное",
+    )
     name_en_selector: str | None = None
     name_ru_selector: str | None = None
     price_without_discount_selector: str | None = None

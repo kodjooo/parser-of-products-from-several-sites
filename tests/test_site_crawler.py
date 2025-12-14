@@ -36,6 +36,7 @@ class DummyContentFetcher:
         url: str,
         image_selector: str | None = None,
         drop_after_selectors: list[str] | None = None,
+        exclude_selectors: list[str] | None = None,
         **kwargs,
     ) -> ProductContent:
         return ProductContent(

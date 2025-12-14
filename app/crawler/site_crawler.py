@@ -450,6 +450,7 @@ class SiteCrawler:
                     normalized,
                     image_selector=self.site.selectors.main_image_selector,
                     drop_after_selectors=self.site.selectors.content_drop_after,
+                    exclude_selectors=self.site.selectors.content_exclude_selectors,
                     download_image=True,
                     name_en_selector=self.site.selectors.name_en_selector,
                     name_ru_selector=self.site.selectors.name_ru_selector,

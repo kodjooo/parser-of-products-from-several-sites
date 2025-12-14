@@ -90,6 +90,23 @@ def test_extract_text_content_drops_after_selector():
     assert text == "Описание товара с выделением"
 
 
+def test_extract_text_content_excludes_specific_blocks():
+    html = """
+    <div>Основное описание</div>
+    <div class="m-productpage-price__similar">
+        <p>Похожие товары</p>
+    </div>
+    <div>Продолжение описания</div>
+    """
+    soup = BeautifulSoup(html, "lxml")
+    text = _extract_text_content(
+        soup,
+        drop_after_selectors=None,
+        exclude_selectors=["div.m-productpage-price__similar"],
+    )
+    assert text == "Основное описание Продолжение описания"
+
+
 def test_extract_text_by_selector_accepts_single_string():
     soup = BeautifulSoup("<div class='price'><span>990</span></div>", "lxml")
     value = _extract_text_by_selector(soup, "div.price span")

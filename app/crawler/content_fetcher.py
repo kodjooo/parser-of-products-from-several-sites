@@ -79,6 +79,7 @@ class ProductContentFetcher:
         product_url: str,
         image_selector: str | None = None,
         drop_after_selectors: Sequence[str] | None = None,
+        exclude_selectors: Sequence[str] | None = None,
         *,
         download_image: bool = True,
         name_en_selector: str | None = None,
@@ -96,7 +97,11 @@ class ProductContentFetcher:
         if not html:
             return ProductContent()
         soup = BeautifulSoup(html, "lxml")
-        text_content = _extract_text_content(soup, drop_after_selectors)
+        text_content = _extract_text_content(
+            soup,
+            drop_after_selectors,
+            exclude_selectors,
+        )
         image_url = None
         if image_selector:
             node = soup.select_one(image_selector)
@@ -213,10 +218,14 @@ class ProductContentFetcher:
 
 
 def _extract_text_content(
-    soup: BeautifulSoup, drop_after_selectors: Sequence[str] | None = None
+    soup: BeautifulSoup,
+    drop_after_selectors: Sequence[str] | None = None,
+    exclude_selectors: Sequence[str] | None = None,
 ) -> str | None:
     if drop_after_selectors:
         _strip_after_selectors(soup, drop_after_selectors)
+    if exclude_selectors:
+        _remove_selectors(soup, exclude_selectors)
     for tag in soup(["script", "style", "noscript", "template"]):
         tag.decompose()
     text = " ".join(soup.get_text(separator=" ", strip=True).split())
@@ -233,6 +242,14 @@ def _strip_after_selectors(soup: BeautifulSoup, selectors: Sequence[str]) -> Non
         to_remove = [node] + list(node.find_all_next())
         for target in to_remove:
             target.decompose()
+
+
+def _remove_selectors(soup: BeautifulSoup, selectors: Sequence[str]) -> None:
+    for selector in selectors:
+        if not selector:
+            continue
+        for node in soup.select(selector):
+            node.decompose()
 
 
 def _extract_text_by_selector(
