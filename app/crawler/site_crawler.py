@@ -47,6 +47,9 @@ class SiteCrawler:
         self._behavior_config = self._prepare_behavior_config(context.config.runtime.behavior)
         self.engine = create_engine(site.engine, context.config.network, self._behavior_config)
         assets_dir = context.assets_dir if context.assets_dir else Path("/app/assets/images")
+        self._fail_cooldown_threshold = context.config.runtime.fail_cooldown_threshold
+        self._fail_cooldown_seconds = context.config.runtime.fail_cooldown_seconds
+        self._category_fail_streak = 0
         shared_browser_engine = (
             self.engine
             if context.config.runtime.product_fetch_engine == "browser"
@@ -70,9 +73,6 @@ class SiteCrawler:
         self._pending_chunk: list[ProductRecord] = []
         self._page_delay: DelayConfig = context.config.runtime.page_delay
         self._product_delay: DelayConfig = context.config.runtime.product_delay
-        self._fail_cooldown_threshold = context.config.runtime.fail_cooldown_threshold
-        self._fail_cooldown_seconds = context.config.runtime.fail_cooldown_seconds
-        self._category_fail_streak = 0
         state_path = getattr(self.context.state_store, "path", None)
         if state_path:
             base_path = state_path
