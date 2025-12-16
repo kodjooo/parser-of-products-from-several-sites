@@ -27,6 +27,7 @@ class EngineRequest:
     pagination: PaginationConfig
     scroll_limit: int | None = None
     behavior_context: BehaviorContext | None = None
+    on_timeout: Callable[[], None] | None = None
 
 
 class CrawlerEngine(Protocol):
@@ -557,6 +558,11 @@ class BrowserEngine:
                         "error_event": event,
                     },
                 )
+                if request.on_timeout:
+                    try:
+                        request.on_timeout()
+                    except Exception:  # pragma: no cover - не должно мешать таймеру
+                        logger.debug("Не удалось вызвать on_timeout callback", exc_info=True)
                 if attempt == total_attempts - 1:
                     raise RuntimeError(f"Не удалось загрузить {request.url}") from exc
                 time.sleep(wait)

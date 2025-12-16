@@ -558,6 +558,44 @@ def test_category_cooldown_flushes_buffer(monkeypatch: pytest.MonkeyPatch, tmp_p
     store.close()
 
 
+def test_fetch_attempt_cooldown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    config = _global_config(tmp_path)
+    config.runtime.fail_cooldown_threshold = 2
+    config.runtime.fail_cooldown_seconds = 6
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-attempt",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+    flushed: list[list[str]] = []
+
+    def fake_flush(chunk: list[str]) -> None:
+        flushed.append(list(chunk))
+
+    sleep_calls: list[int] = []
+    monkeypatch.setattr("app.crawler.site_crawler.time.sleep", lambda seconds: sleep_calls.append(seconds))
+
+    crawler = SiteCrawler(context, site, flush_products=1, flush_callback=fake_flush)
+    crawler._pending_chunk = ["p1"]  # type: ignore[assignment]
+
+    crawler._register_fetch_attempt_failure()
+    assert not sleep_calls
+
+    crawler._register_fetch_attempt_failure()
+    assert sleep_calls == [6]
+    assert crawler._fetch_attempt_fail_streak == 0
+    assert flushed == [["p1"]]
+    store.close()
+
+
 def test_site_crawler_resumes_from_last_product(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     site = _site_config()
     config = _global_config(tmp_path)

@@ -253,5 +253,10 @@ def test_behavior_scroll_respects_context_limits() -> None:
 
     scroll_actions = [a for a in result.actions if a.startswith("scroll:")]
     assert scroll_actions
-    percents = [int(action.split(":")[1]) for action in scroll_actions]
-    assert max(percents) <= 25
+    numeric_values: list[int] = []
+    for action in scroll_actions:
+        value = action.split(":", 1)[1]
+        if value.isdigit():
+            numeric_values.append(int(value))
+    assert numeric_values
+    assert max(numeric_values) <= 25

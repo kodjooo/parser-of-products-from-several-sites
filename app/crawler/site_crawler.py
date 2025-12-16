@@ -73,6 +73,7 @@ class SiteCrawler:
         self._pending_chunk: list[ProductRecord] = []
         self._page_delay: DelayConfig = context.config.runtime.page_delay
         self._product_delay: DelayConfig = context.config.runtime.product_delay
+        self._fetch_attempt_fail_streak = 0
         state_path = getattr(self.context.state_store, "path", None)
         if state_path:
             base_path = state_path
@@ -314,10 +315,12 @@ class SiteCrawler:
             pagination=self.site.pagination,
             scroll_limit=scroll_limit,
             behavior_context=self._build_behavior_context(category_url=url),
+            on_timeout=self._register_fetch_attempt_failure,
         )
         try:
             html = self.engine.fetch_html(request)
             self._register_category_fetch_success()
+            self._register_fetch_attempt_success()
         except Exception:
             self._register_category_fetch_failure()
             raise
@@ -326,6 +329,7 @@ class SiteCrawler:
             try:
                 html = self.engine.fetch_html(request)
                 self._register_category_fetch_success()
+                self._register_fetch_attempt_success()
             except Exception:
                 self._register_category_fetch_failure()
                 raise
@@ -865,14 +869,25 @@ class SiteCrawler:
         self._category_fail_streak += 1
         self._try_cooldown("category", self._category_fail_streak)
 
+    def _register_fetch_attempt_failure(self) -> None:
+        self._fetch_attempt_fail_streak += 1
+        self._try_cooldown("attempt", self._fetch_attempt_fail_streak)
+
+    def _register_fetch_attempt_success(self) -> None:
+        if self._fetch_attempt_fail_streak:
+            self._fetch_attempt_fail_streak = 0
+
     def _try_cooldown(self, target: str, streak: int) -> None:
         if self._fail_cooldown_threshold <= 0:
             return
         if streak < self._fail_cooldown_threshold:
             return
+        message = {
+            "category": "Достигнут предел подряд неудачных загрузок категорий, временно приостанавливаем обход",
+            "attempt": "Достигнут предел подряд неудачных попыток загрузки страниц, временно приостанавливаем обход",
+        }.get(target, "Достигнут предел подряд неудачных загрузок, временно приостанавливаем обход")
         logger.warning(
-            "Достигнут предел подряд неудачных загрузок %s, временно приостанавливаем обход",
-            target,
+            message,
             extra={
                 "site": self.site.name,
                 "target": target,
@@ -886,3 +901,6 @@ class SiteCrawler:
             time.sleep(self._fail_cooldown_seconds)
         if target == "category":
             self._category_fail_streak = 0
+            self._fetch_attempt_fail_streak = 0
+        elif target == "attempt":
+            self._fetch_attempt_fail_streak = 0
