@@ -9,4 +9,5 @@ secrets/
 *.log
 .venv/
 config/sites/
+config/sites/winestyle-7.yml
 conf-another-version/

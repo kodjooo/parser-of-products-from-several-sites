@@ -152,6 +152,8 @@ class RuntimeConfig(BaseModel):
     product_delay: DelayConfig = Field(default_factory=_default_product_delay)
     behavior: HumanBehaviorConfig = Field(default_factory=HumanBehaviorConfig)
     product_fetch_engine: Literal["http", "browser"] = Field(default="http")
+    fail_cooldown_threshold: int = Field(default=5, ge=0)
+    fail_cooldown_seconds: int = Field(default=3600, ge=0)
 
 
 class DedupeConfig(BaseModel):

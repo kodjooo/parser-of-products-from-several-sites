@@ -50,6 +50,8 @@ def load_global_config_from_env() -> GlobalConfig:
         ),
         behavior=_behavior_from_env(),
         product_fetch_engine=_product_fetch_engine(),
+        fail_cooldown_threshold=_ensure_cooldown_threshold(),
+        fail_cooldown_seconds=_ensure_cooldown_seconds(),
     )
 
     headless_flag = _bool("NETWORK_BROWSER_HEADLESS", default=True)
@@ -210,6 +212,20 @@ def _product_fetch_engine() -> str:
     value = os.getenv("PRODUCT_FETCH_ENGINE", "http").strip().lower()
     if value not in {"http", "browser"}:
         raise ConfigLoaderError("PRODUCT_FETCH_ENGINE должен быть 'http' или 'browser'")
+    return value
+
+
+def _ensure_cooldown_threshold() -> int:
+    value = _int("FAIL_COOLDOWN_THRESHOLD", default=5)
+    if value is None:
+        return 5
+    return value
+
+
+def _ensure_cooldown_seconds() -> int:
+    value = _int("FAIL_COOLDOWN_SECONDS", default=3600)
+    if value is None:
+        return 3600
     return value
 
 

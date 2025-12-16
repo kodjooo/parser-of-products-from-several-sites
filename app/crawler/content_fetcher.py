@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from pathlib import Path
 from typing import Any, Literal, Sequence
 from urllib.parse import urljoin
@@ -44,6 +45,8 @@ class ProductContentFetcher:
         fetch_engine: Literal["http", "browser"] = "http",
         behavior_config: HumanBehaviorConfig | None = None,
         shared_browser_engine: BrowserEngine | None = None,
+        fail_cooldown_threshold: int = 5,
+        fail_cooldown_seconds: int = 3600,
     ):
         self.network = network
         self.image_dir = image_dir
@@ -73,6 +76,9 @@ class ProductContentFetcher:
                 }
             )
         self.image_saver = ImageSaver(network, image_dir, proxy_pool=self._proxy_pool)
+        self._fail_cooldown_threshold = max(0, fail_cooldown_threshold)
+        self._fail_cooldown_seconds = max(0, fail_cooldown_seconds)
+        self._product_fail_streak = 0
 
     def fetch(
         self,
@@ -89,13 +95,19 @@ class ProductContentFetcher:
         behavior_context: BehaviorContext | None = None,
     ) -> ProductContent:
         proxy_used: str | None = None
-        if self._browser:
-            html = self._fetch_html_browser(product_url, behavior_context)
-            proxy_used = getattr(self._browser, "last_proxy", None)
-        else:
-            html, proxy_used = self._fetch_html_http(product_url)
+        try:
+            if self._browser:
+                html = self._fetch_html_browser(product_url, behavior_context)
+                proxy_used = getattr(self._browser, "last_proxy", None)
+            else:
+                html, proxy_used = self._fetch_html_http(product_url)
+        except Exception:
+            self._register_product_failure()
+            raise
         if not html:
+            self._register_product_failure()
             return ProductContent()
+        self._register_product_success()
         soup = BeautifulSoup(html, "lxml")
         text_content = _extract_text_content(
             soup,
@@ -215,6 +227,29 @@ class ProductContentFetcher:
         if self._browser and self._owns_browser:
             self._browser.shutdown()
         self.image_saver.close()
+
+    def _register_product_success(self) -> None:
+        if self._product_fail_streak:
+            self._product_fail_streak = 0
+
+    def _register_product_failure(self) -> None:
+        self._product_fail_streak += 1
+        if (
+            self._fail_cooldown_threshold <= 0
+            or self._product_fail_streak < self._fail_cooldown_threshold
+        ):
+            return
+        logger.warning(
+            "Достигнут предел подряд неудачных загрузок карточек, делаем паузу",
+            extra={
+                "streak": self._product_fail_streak,
+                "threshold": self._fail_cooldown_threshold,
+                "cooldown_sec": self._fail_cooldown_seconds,
+            },
+        )
+        if self._fail_cooldown_seconds > 0:
+            time.sleep(self._fail_cooldown_seconds)
+        self._product_fail_streak = 0
 
 
 def _extract_text_content(

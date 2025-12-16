@@ -59,6 +59,8 @@ class SiteCrawler:
             fetch_engine=context.config.runtime.product_fetch_engine,
             behavior_config=self._behavior_config,
             shared_browser_engine=shared_browser_engine,
+            fail_cooldown_threshold=self._fail_cooldown_threshold,
+            fail_cooldown_seconds=self._fail_cooldown_seconds,
         )
         self.dedupe_strip = context.config.dedupe.strip_params_blacklist
         self._seen_urls: set[str] = set()
@@ -68,6 +70,9 @@ class SiteCrawler:
         self._pending_chunk: list[ProductRecord] = []
         self._page_delay: DelayConfig = context.config.runtime.page_delay
         self._product_delay: DelayConfig = context.config.runtime.product_delay
+        self._fail_cooldown_threshold = context.config.runtime.fail_cooldown_threshold
+        self._fail_cooldown_seconds = context.config.runtime.fail_cooldown_seconds
+        self._category_fail_streak = 0
         state_path = getattr(self.context.state_store, "path", None)
         if state_path:
             base_path = state_path
@@ -310,10 +315,20 @@ class SiteCrawler:
             scroll_limit=scroll_limit,
             behavior_context=self._build_behavior_context(category_url=url),
         )
-        html = self.engine.fetch_html(request)
+        try:
+            html = self.engine.fetch_html(request)
+            self._register_category_fetch_success()
+        except Exception:
+            self._register_category_fetch_failure()
+            raise
         retries = 0
         while not self._wait_conditions_met(html) and retries < 2:
-            html = self.engine.fetch_html(request)
+            try:
+                html = self.engine.fetch_html(request)
+                self._register_category_fetch_success()
+            except Exception:
+                self._register_category_fetch_failure()
+                raise
             retries += 1
         self._sleep_between_pages()
         return html
@@ -841,3 +856,33 @@ class SiteCrawler:
 
     def _global_stop_reached(self) -> bool:
         return self.context.product_limit_reached()
+
+    def _register_category_fetch_success(self) -> None:
+        if self._category_fail_streak:
+            self._category_fail_streak = 0
+
+    def _register_category_fetch_failure(self) -> None:
+        self._category_fail_streak += 1
+        self._try_cooldown("category", self._category_fail_streak)
+
+    def _try_cooldown(self, target: str, streak: int) -> None:
+        if self._fail_cooldown_threshold <= 0:
+            return
+        if streak < self._fail_cooldown_threshold:
+            return
+        logger.warning(
+            "Достигнут предел подряд неудачных загрузок %s, временно приостанавливаем обход",
+            target,
+            extra={
+                "site": self.site.name,
+                "target": target,
+                "streak": streak,
+                "threshold": self._fail_cooldown_threshold,
+                "cooldown_sec": self._fail_cooldown_seconds,
+            },
+        )
+        self._emit_pending(force=True)
+        if self._fail_cooldown_seconds > 0:
+            time.sleep(self._fail_cooldown_seconds)
+        if target == "category":
+            self._category_fail_streak = 0

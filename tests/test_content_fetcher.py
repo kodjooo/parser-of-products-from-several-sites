@@ -199,6 +199,31 @@ def test_fetch_uses_browser_engine_for_content(tmp_path):
     assert not recorder.saved_http
 
 
+def test_product_cooldown_waits_after_streak(monkeypatch, tmp_path):
+    network = NetworkConfig(user_agents=["UA"], proxy_pool=[])
+    fetcher = ProductContentFetcher(
+        network,
+        Path(tmp_path),
+        fail_cooldown_threshold=2,
+        fail_cooldown_seconds=9,
+    )
+    sleep_calls: list[int] = []
+    monkeypatch.setattr("app.crawler.content_fetcher.time.sleep", lambda seconds: sleep_calls.append(seconds))
+
+    def fake_fetch_html_http(self, product_url: str):
+        return None, None
+
+    monkeypatch.setattr(ProductContentFetcher, "_fetch_html_http", fake_fetch_html_http, raising=False)
+
+    result1 = fetcher.fetch("https://example.com/a")
+    result2 = fetcher.fetch("https://example.com/b")
+
+    assert result1.text_content is None
+    assert result2.text_content is None
+    assert sleep_calls == [9]
+    assert fetcher._product_fail_streak == 0
+
+
 def test_fetch_falls_back_to_http_when_browser_binary_fails(tmp_path):
     network = NetworkConfig(user_agents=["UA"], proxy_pool=[])
     fetcher = ProductContentFetcher(network, Path(tmp_path))
