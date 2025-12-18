@@ -552,7 +552,7 @@ def test_category_cooldown_flushes_buffer(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert crawler._category_fail_streak == 1
 
     crawler._register_category_fetch_failure()
-    assert sleep_calls == [7]
+    assert not sleep_calls
     assert crawler._category_fail_streak == 0
     assert flushed == [["p1"]]
     store.close()
@@ -590,7 +590,7 @@ def test_fetch_attempt_cooldown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert not sleep_calls
 
     crawler._register_fetch_attempt_failure()
-    assert sleep_calls == [6]
+    assert not sleep_calls
     assert crawler._fetch_attempt_fail_streak == 0
     assert flushed == [["p1"]]
     store.close()

@@ -220,7 +220,7 @@ def test_product_cooldown_waits_after_streak(monkeypatch, tmp_path):
 
     assert result1.text_content is None
     assert result2.text_content is None
-    assert sleep_calls == [9]
+    assert sleep_calls == []
     assert fetcher._product_fail_streak == 0
 
 

@@ -223,9 +223,9 @@ def _ensure_cooldown_threshold() -> int:
 
 
 def _ensure_cooldown_seconds() -> int:
-    value = _int("FAIL_COOLDOWN_SECONDS", default=3600)
+    value = _int("FAIL_COOLDOWN_SECONDS", default=0)
     if value is None:
-        return 3600
+        return 0
     return value
 
 

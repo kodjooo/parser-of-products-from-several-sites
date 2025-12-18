@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import time
 from pathlib import Path
 from typing import Any, Literal, Sequence
 from urllib.parse import urljoin
@@ -247,8 +246,6 @@ class ProductContentFetcher:
                 "cooldown_sec": self._fail_cooldown_seconds,
             },
         )
-        if self._fail_cooldown_seconds > 0:
-            time.sleep(self._fail_cooldown_seconds)
         self._product_fail_streak = 0
 
 

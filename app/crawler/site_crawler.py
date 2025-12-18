@@ -897,8 +897,6 @@ class SiteCrawler:
             },
         )
         self._emit_pending(force=True)
-        if self._fail_cooldown_seconds > 0:
-            time.sleep(self._fail_cooldown_seconds)
         if target == "category":
             self._category_fail_streak = 0
             self._fetch_attempt_fail_streak = 0
