@@ -57,6 +57,19 @@ python scripts/cooldown_watchdog.py \
 ```
 По умолчанию используется `docker compose`, сервис `parser` и дебаунс 5 минут между перезапусками. Можно изменить бинарь (`--compose-bin docker-compose`), интервал чтения (`--poll-interval`) и задержку между рестартами (`--debounce-seconds`). Скрипт удобно повесить на systemd/cron, чтобы он автоматически держал агент в рабочем состоянии.
 
+Для запуска целой связки одной командой добавлен сервис `watchdog` в `docker-compose.yml`. Он собирается из образа `Dockerfile.watchdog`, монтирует `docker.sock` и вызывает скрипт в режиме `--restart-mode service`, поэтому перезапускает только контейнер `parser`, не останавливая себя. Запуск и остановка теперь выглядят так:
+
+```bash
+# запуск парсера с автономным watchdog
+docker compose up watchdog
+
+# остановка обоих контейнеров
+docker compose down
+
+# Лог watchdog
+logs/watchdog.log
+```
+
 ## Сборка и запуск в Docker
 Перед контейнерным запуском установите `APP_RUN_ENV=docker` в `.env` (или пробросьте переменную окружения), чтобы значения по умолчанию указывали на каталоги внутри контейнера (`/app/config/sites`, `/app/assets/images`, `/var/app/state`, `/secrets`).
 ```bash

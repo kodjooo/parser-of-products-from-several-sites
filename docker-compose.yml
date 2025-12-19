@@ -14,14 +14,32 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    command:
+    command: ["python", "-m", "app.main"]
+
+  watchdog:
+    build:
+      context: .
+      dockerfile: Dockerfile.watchdog
+    restart: always
+    depends_on:
+      - parser
+    volumes:
+      - .:/workspace
+      - ./logs:/var/log/parser
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /workspace
+    entrypoint:
       [
-        "python",
-        "-m",
-        "app.main",
-        "watch",
-        "--success-delay",
-        "300",
-        "--error-delay",
-        "120",
+        "python3",
+        "scripts/cooldown_watchdog.py",
+        "--log-file",
+        "/var/log/parser/parser.log",
+        "--project-dir",
+        "/workspace",
+        "--service",
+        "parser",
+        "--restart-mode",
+        "service",
+        "--log-output",
+        "/var/log/parser/watchdog.log",
       ]
