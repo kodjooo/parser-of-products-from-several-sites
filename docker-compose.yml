@@ -40,6 +40,8 @@ services:
         "parser",
         "--restart-mode",
         "service",
+        "--buildkit",
+        "off",
         "--log-output",
         "/var/log/parser/watchdog.log",
       ]

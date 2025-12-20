@@ -26,9 +26,17 @@ def should_trigger(line: str) -> bool:
 
 
 def restart_stack(
-    project_dir: Path, compose_bin: str, service: str, mode: str = "stack"
+    project_dir: Path,
+    compose_bin: str,
+    service: str,
+    mode: str = "stack",
+    buildkit: str = "on",
 ) -> None:
     """Перезапускает сервис, используя выбранный режим."""
+    env = os.environ.copy()
+    if buildkit == "off":
+        env["DOCKER_BUILDKIT"] = "0"
+        env["COMPOSE_DOCKER_CLI_BUILD"] = "0"
     if mode == "service":
         commands: list[list[str]] = [
             [compose_bin, "compose", "stop", service],
@@ -41,7 +49,7 @@ def restart_stack(
             [compose_bin, "compose", "up", "-d", "--build", service],
         ]
     for command in commands:
-        subprocess.run(command, cwd=project_dir, check=True)
+        subprocess.run(command, cwd=project_dir, check=True, env=env)
 
 
 def _follow_log(log_path: Path, poll_interval: float) -> Iterator[str]:
@@ -114,6 +122,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--buildkit",
+        choices=("on", "off"),
+        default="on",
+        help=(
+            "Как запускать сборку: on — обычный BuildKit, off — "
+            "отключить BuildKit (DOCKER_BUILDKIT=0)."
+        ),
+    )
+    parser.add_argument(
         "--log-output",
         help="Путь к дополнительному файлу лога watchdog (пишется параллельно stdout).",
     )
@@ -137,7 +154,11 @@ def main() -> None:
         _log(f"Обнаружен сигнал в логе: {line.strip()}")
         try:
             restart_stack(
-                project_dir, args.compose_bin, args.service, mode=args.restart_mode
+                project_dir,
+                args.compose_bin,
+                args.service,
+                mode=args.restart_mode,
+                buildkit=args.buildkit,
             )
         except subprocess.CalledProcessError as exc:  # pragma: no cover - внешние ошибки
             _log(f"Не удалось перезапустить docker compose: {exc}")
