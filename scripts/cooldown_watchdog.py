@@ -31,39 +31,74 @@ def restart_stack(
     service: str,
     mode: str = "stack",
     buildkit: str = "on",
+    build: str = "on",
+    command_timeout: float | None = None,
 ) -> None:
     """Перезапускает сервис, используя выбранный режим."""
     env = os.environ.copy()
     if buildkit == "off":
         env["DOCKER_BUILDKIT"] = "0"
         env["COMPOSE_DOCKER_CLI_BUILD"] = "0"
+    build_flag: list[str] = ["--build"] if build == "on" else []
     if mode == "service":
         commands: list[list[str]] = [
             [compose_bin, "compose", "stop", service],
             [compose_bin, "compose", "rm", "-f", service],
-            [compose_bin, "compose", "up", "-d", "--build", service],
+            [compose_bin, "compose", "up", "-d", *build_flag, service],
         ]
     else:
         commands = [
             [compose_bin, "compose", "down"],
-            [compose_bin, "compose", "up", "-d", "--build", service],
+            [compose_bin, "compose", "up", "-d", *build_flag, service],
         ]
     for command in commands:
-        subprocess.run(command, cwd=project_dir, check=True, env=env)
+        _log(f"Запускаем команду: {' '.join(command)}")
+        subprocess.run(
+            command,
+            cwd=project_dir,
+            check=True,
+            env=env,
+            timeout=command_timeout,
+        )
+
+
+def _get_inode(path: Path) -> int:
+    return path.stat().st_ino
 
 
 def _follow_log(log_path: Path, poll_interval: float) -> Iterator[str]:
-    """Генератор новых строк файла (tail -f)."""
+    """Генератор новых строк файла (tail -f) с поддержкой ротации/усечения."""
     while not log_path.exists():
         time.sleep(poll_interval)
-    with log_path.open("r", encoding="utf-8") as handle:
-        handle.seek(0, os.SEEK_END)
-        while True:
-            line = handle.readline()
-            if not line:
-                time.sleep(poll_interval)
-                continue
+    handle = log_path.open("r", encoding="utf-8")
+    handle.seek(0, os.SEEK_END)
+    current_inode = _get_inode(log_path)
+    while True:
+        line = handle.readline()
+        if line:
             yield line
+            continue
+        time.sleep(poll_interval)
+        if not log_path.exists():
+            handle.close()
+            while not log_path.exists():
+                time.sleep(poll_interval)
+            handle = log_path.open("r", encoding="utf-8")
+            handle.seek(0, os.SEEK_END)
+            current_inode = _get_inode(log_path)
+            continue
+        try:
+            stat = log_path.stat()
+        except FileNotFoundError:
+            continue
+        if stat.st_ino != current_inode:
+            handle.close()
+            handle = log_path.open("r", encoding="utf-8")
+            handle.seek(0, os.SEEK_END)
+            current_inode = stat.st_ino
+            continue
+        if stat.st_size < handle.tell():
+            handle.seek(0)
 
 
 def _log(message: str) -> None:
@@ -131,6 +166,18 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--build",
+        choices=("on", "off"),
+        default="on",
+        help="Нужно ли пересобирать сервис при перезапуске (по умолчанию on).",
+    )
+    parser.add_argument(
+        "--command-timeout",
+        type=float,
+        default=600.0,
+        help="Таймаут на выполнение одной docker compose команды (секунды).",
+    )
+    parser.add_argument(
         "--log-output",
         help="Путь к дополнительному файлу лога watchdog (пишется параллельно stdout).",
     )
@@ -159,7 +206,11 @@ def main() -> None:
                 args.service,
                 mode=args.restart_mode,
                 buildkit=args.buildkit,
+                build=args.build,
+                command_timeout=args.command_timeout,
             )
+        except subprocess.TimeoutExpired as exc:  # pragma: no cover - внешние ошибки
+            _log(f"Таймаут команды docker compose: {exc}")
         except subprocess.CalledProcessError as exc:  # pragma: no cover - внешние ошибки
             _log(f"Не удалось перезапустить docker compose: {exc}")
         else:

@@ -42,6 +42,10 @@ services:
         "service",
         "--buildkit",
         "off",
+        "--build",
+        "off",
+        "--command-timeout",
+        "600",
         "--log-output",
         "/var/log/parser/watchdog.log",
       ]
