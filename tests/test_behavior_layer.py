@@ -256,7 +256,7 @@ def test_behavior_scroll_respects_context_limits() -> None:
     numeric_values: list[int] = []
     for action in scroll_actions:
         value = action.split(":", 1)[1]
-        if value.isdigit():
-            numeric_values.append(int(value))
+        assert value.isdigit()
+        numeric_values.append(int(value))
     assert numeric_values
     assert max(numeric_values) <= 25

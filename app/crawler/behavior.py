@@ -130,7 +130,7 @@ class HumanBehaviorController:
         if random.random() < 0.15:
             try:
                 page.evaluate("() => window.scrollTo(0, 0);")
-                actions.append("scroll:back-to-top")
+                actions.append("scroll:0")
             except Exception:  # pragma: no cover - зависит от браузера
                 pass
         return actions
