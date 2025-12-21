@@ -596,6 +596,37 @@ def test_fetch_attempt_cooldown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     store.close()
 
 
+def test_cooldown_stops_crawl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    site = _site_config()
+    config = _global_config(tmp_path)
+    config.runtime.fail_cooldown_threshold = 1
+    config.runtime.fail_cooldown_seconds = 5
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-cooldown-stop",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=True,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=1,
+    )
+    fake_engine = FakeEngine({})
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: fake_engine)
+    monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: DummyContentFetcher())
+
+    crawler = SiteCrawler(context, site, flush_products=1)
+    crawler._register_fetch_attempt_failure()
+
+    result = crawler.crawl()
+
+    assert result.records == []
+    assert fake_engine.calls == []
+    store.close()
+
+
 def test_site_crawler_resumes_from_last_product(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     site = _site_config()
     config = _global_config(tmp_path)
