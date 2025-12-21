@@ -52,7 +52,16 @@ def restart_stack(
             [compose_bin, "compose", "up", "-d", *build_flag, service],
         ]
     for command in commands:
-        _log(f"Запускаем команду: {' '.join(command)}")
+        action = "unknown"
+        if "down" in command:
+            action = "down"
+        elif "up" in command:
+            action = "up"
+        elif "stop" in command:
+            action = "stop"
+        elif "rm" in command:
+            action = "rm"
+        _log(f"Запускаем команду ({action}): {' '.join(command)}")
         subprocess.run(
             command,
             cwd=project_dir,
