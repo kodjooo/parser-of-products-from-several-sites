@@ -45,11 +45,11 @@ services:
         "--build",
         "on",
         "--command-timeout",
-        "600",
+        "1800",
         "--retry-attempts",
         "0",
         "--retry-delay-seconds",
-        "120",
+        "300",
         "--log-output",
         "/var/log/parser/watchdog.log",
       ]
