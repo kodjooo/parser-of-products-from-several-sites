@@ -50,6 +50,7 @@ class SiteCrawler:
         self._fail_cooldown_threshold = context.config.runtime.fail_cooldown_threshold
         self._fail_cooldown_seconds = context.config.runtime.fail_cooldown_seconds
         self._category_fail_streak = 0
+        self._cooldown_active = False
         shared_browser_engine = (
             self.engine
             if context.config.runtime.product_fetch_engine == "browser"
@@ -95,6 +96,12 @@ class SiteCrawler:
         metrics: list[CategoryMetrics] = []
         try:
             for category_url in self.site.category_urls:
+                if self._cooldown_active:
+                    logger.warning(
+                        "Останавливаем обход из-за активного cooldown",
+                        extra={"site": self.site.name},
+                    )
+                    break
                 category_result = self._crawl_category(category_url)
                 records.extend(category_result.records)
                 metrics.append(category_result.metrics)
@@ -148,6 +155,8 @@ class SiteCrawler:
         page = start_page
         empty_pages_streak = 0
         while page <= max_pages and not self._global_stop_reached():
+            if self._cooldown_active:
+                break
             url = self._build_page_url(category_url, page)
             try:
                 html = self._fetch_page_html(url)
@@ -214,6 +223,8 @@ class SiteCrawler:
         page = 1
         empty_pages_streak = 0
         while next_url and page <= max_pages and not self._global_stop_reached():
+            if self._cooldown_active:
+                break
             try:
                 html = self._fetch_page_html(next_url)
             except Exception as exc:
@@ -269,6 +280,8 @@ class SiteCrawler:
     def _crawl_infinite_scroll(self, category_url: str) -> CategoryResult:
         scroll_limit = self.site.limits.max_scrolls
         metrics = CategoryMetrics(site_name=self.site.name, category_url=category_url)
+        if self._cooldown_active:
+            return CategoryResult(records=[], metrics=metrics)
         try:
             html = self._fetch_page_html(category_url, scroll_limit=scroll_limit)
         except Exception as exc:
@@ -309,6 +322,8 @@ class SiteCrawler:
         return CategoryResult(records=records, metrics=metrics)
 
     def _fetch_page_html(self, url: str, scroll_limit: int | None = None) -> str:
+        if self._cooldown_active:
+            raise RuntimeError("Cooldown активен, прекращаем обработку")
         request = EngineRequest(
             url=url,
             wait_conditions=self.site.wait_conditions,
@@ -897,6 +912,7 @@ class SiteCrawler:
             },
         )
         self._emit_pending(force=True)
+        self._cooldown_active = True
         if target == "category":
             self._category_fail_streak = 0
             self._fetch_attempt_fail_streak = 0
