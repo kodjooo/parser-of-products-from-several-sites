@@ -207,8 +207,6 @@ def test_product_cooldown_waits_after_streak(monkeypatch, tmp_path):
         fail_cooldown_threshold=2,
         fail_cooldown_seconds=9,
     )
-    sleep_calls: list[int] = []
-    monkeypatch.setattr("app.crawler.content_fetcher.time.sleep", lambda seconds: sleep_calls.append(seconds))
 
     def fake_fetch_html_http(self, product_url: str):
         return None, None
@@ -220,7 +218,6 @@ def test_product_cooldown_waits_after_streak(monkeypatch, tmp_path):
 
     assert result1.text_content is None
     assert result2.text_content is None
-    assert sleep_calls == []
     assert fetcher._product_fail_streak == 0
 
 

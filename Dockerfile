@@ -31,6 +31,7 @@ RUN apt-get update \
     && playwright install chromium
 
 COPY app ./app
+COPY scripts ./scripts
 COPY tests ./tests
 
 CMD ["python", "-m", "app.main"]
