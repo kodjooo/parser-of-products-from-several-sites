@@ -49,7 +49,7 @@ def restart_stack(
     else:
         commands = [
             [compose_bin, "compose", "down"],
-            [compose_bin, "compose", "up", "-d", *build_flag, service],
+            [compose_bin, "compose", "up", "-d", *build_flag],
         ]
     for command in commands:
         action = "unknown"
