@@ -45,7 +45,7 @@ services:
         "--build",
         "on",
         "--command-timeout",
-        "1800",
+        "3600",
         "--retry-attempts",
         "0",
         "--retry-delay-seconds",
