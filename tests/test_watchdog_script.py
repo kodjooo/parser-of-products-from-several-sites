@@ -48,6 +48,23 @@ def test_restart_stack_skips_build(monkeypatch, tmp_path: Path) -> None:
     ]
 
 
+def test_run_with_retries_succeeds_after_retry(monkeypatch) -> None:
+    attempts: list[int] = []
+
+    def flaky() -> None:
+        attempts.append(1)
+        if len(attempts) < 2:
+            raise watchdog.subprocess.CalledProcessError(1, ["docker"])
+
+    def fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(watchdog.time, "sleep", fake_sleep)
+
+    assert watchdog._run_with_retries(flaky, attempts=3, delay_seconds=0.1) is True
+    assert len(attempts) == 2
+
+
 def test_follow_log_handles_truncate(tmp_path: Path) -> None:
     log_path = tmp_path / "parser.log"
     log_path.write_text("old line\n", encoding="utf-8")

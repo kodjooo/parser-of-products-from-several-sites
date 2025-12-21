@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 TRIGGER_PHRASES = (
     "Достигнут предел подряд неудачных загрузок категорий",
@@ -111,6 +111,25 @@ def _log(message: str) -> None:
             fp.write(line + "\n")
 
 
+def _run_with_retries(
+    action: Callable[[], None],
+    attempts: int,
+    delay_seconds: float,
+) -> bool:
+    """Выполняет действие с повторами. attempts=0 означает бесконечные попытки."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            action()
+            return True
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            _log(f"Ошибка перезапуска (попытка {attempt}): {exc}")
+            if attempts and attempt >= attempts:
+                return False
+            time.sleep(delay_seconds)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Следит за логом агента и перезапускает docker compose после серии таймаутов."
@@ -178,6 +197,18 @@ def main() -> None:
         help="Таймаут на выполнение одной docker compose команды (секунды).",
     )
     parser.add_argument(
+        "--retry-attempts",
+        type=int,
+        default=3,
+        help="Сколько раз повторять перезапуск при ошибке (0 — бесконечно).",
+    )
+    parser.add_argument(
+        "--retry-delay-seconds",
+        type=float,
+        default=60.0,
+        help="Пауза между попытками перезапуска (секунды).",
+    )
+    parser.add_argument(
         "--log-output",
         help="Путь к дополнительному файлу лога watchdog (пишется параллельно stdout).",
     )
@@ -199,7 +230,7 @@ def main() -> None:
             _log("Сигнал уже обрабатывался, пропускаем повторный перезапуск.")
             continue
         _log(f"Обнаружен сигнал в логе: {line.strip()}")
-        try:
+        def _attempt_restart() -> None:
             restart_stack(
                 project_dir,
                 args.compose_bin,
@@ -209,11 +240,8 @@ def main() -> None:
                 build=args.build,
                 command_timeout=args.command_timeout,
             )
-        except subprocess.TimeoutExpired as exc:  # pragma: no cover - внешние ошибки
-            _log(f"Таймаут команды docker compose: {exc}")
-        except subprocess.CalledProcessError as exc:  # pragma: no cover - внешние ошибки
-            _log(f"Не удалось перезапустить docker compose: {exc}")
-        else:
+
+        if _run_with_retries(_attempt_restart, args.retry_attempts, args.retry_delay_seconds):
             last_restart_ts = now
             _log("Контейнер перезапущен.")
 

@@ -57,7 +57,7 @@ python scripts/cooldown_watchdog.py \
 ```
 По умолчанию используется `docker compose`, сервис `parser` и дебаунс 5 минут между перезапусками. Можно изменить бинарь (`--compose-bin docker-compose`), интервал чтения (`--poll-interval`) и задержку между рестартами (`--debounce-seconds`). Скрипт удобно повесить на systemd/cron, чтобы он автоматически держал агент в рабочем состоянии.
 
-Для запуска целой связки одной командой добавлен сервис `watchdog` в `docker-compose.yml`. Он собирается из образа `Dockerfile.watchdog`, монтирует `docker.sock` и вызывает скрипт в режиме `--restart-mode service`, поэтому перезапускает только контейнер `parser`, не останавливая себя. По умолчанию watchdog отключает BuildKit (`--buildkit off`) и пересборку (`--build off`), чтобы избегать сетевых проблем при рестарте; при необходимости можно вернуть пересборку и настроить `--command-timeout`. Запуск и остановка теперь выглядят так:
+Для запуска целой связки одной командой добавлен сервис `watchdog` в `docker-compose.yml`. Он собирается из образа `Dockerfile.watchdog`, монтирует `docker.sock` и вызывает скрипт в режиме `--restart-mode stack`, поэтому выполняет `docker compose down` + `docker compose up -d --build` для всей связки. По умолчанию watchdog отключает BuildKit (`--buildkit off`), но оставляет пересборку (`--build on`) и повторяет рестарт до успеха (`--retry-attempts 0`, `--retry-delay-seconds`), чтобы переживать сетевые сбои. Запуск и остановка теперь выглядят так:
 
 ```bash
 # запуск парсера с автономным watchdog
