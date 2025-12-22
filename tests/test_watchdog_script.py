@@ -65,6 +65,13 @@ def test_run_with_retries_succeeds_after_retry(monkeypatch) -> None:
     assert len(attempts) == 2
 
 
+def test_parse_log_timestamp() -> None:
+    ts = watchdog._parse_log_timestamp("2025-12-21 12:01:02 WARNING something happened")
+    assert ts is not None
+    assert ts.year == 2025
+    assert watchdog._parse_log_timestamp("not-a-timestamp line") is None
+
+
 def test_follow_log_handles_truncate(tmp_path: Path) -> None:
     log_path = tmp_path / "parser.log"
     log_path.write_text("old line\n", encoding="utf-8")

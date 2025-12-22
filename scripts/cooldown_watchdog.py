@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Callable, Iterator
+from datetime import datetime
 
 TRIGGER_PHRASES = (
     "Достигнут предел подряд неудачных загрузок категорий",
@@ -23,6 +24,17 @@ _LOG_FILE: Path | None = None
 def should_trigger(line: str) -> bool:
     """Возвращает True, если строка лога сообщает о превышении порога неудачных попыток."""
     return any(phrase in line for phrase in TRIGGER_PHRASES)
+
+
+def _parse_log_timestamp(line: str) -> datetime | None:
+    """Пытается извлечь дату/время из начала строки лога."""
+    if len(line) < 19:
+        return None
+    candidate = line[:19]
+    try:
+        return datetime.strptime(candidate, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
 
 
 def restart_stack(
@@ -226,6 +238,7 @@ def main() -> None:
     log_path = Path(args.log_file)
     project_dir = Path(args.project_dir)
     last_restart_ts = 0.0
+    start_dt = datetime.utcnow()
     global _LOG_FILE
     if args.log_output:
         _LOG_FILE = Path(args.log_output)
@@ -233,6 +246,10 @@ def main() -> None:
     _log(f"Старт слежения за {log_path}")
     for line in _follow_log(log_path, args.poll_interval):
         if not should_trigger(line):
+            continue
+        line_ts = _parse_log_timestamp(line)
+        if line_ts and line_ts < start_dt:
+            _log("Сигнал слишком старый, пропускаем перезапуск.")
             continue
         now = time.time()
         if now - last_restart_ts < args.debounce_seconds:
