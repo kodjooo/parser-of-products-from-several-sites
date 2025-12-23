@@ -65,6 +65,26 @@ def test_run_with_retries_succeeds_after_retry(monkeypatch) -> None:
     assert len(attempts) == 2
 
 
+def test_run_with_retries_accepts_running_status(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def always_timeout() -> None:
+        calls.append("attempt")
+        raise watchdog.subprocess.TimeoutExpired(cmd=["docker"], timeout=1)
+
+    def status_check() -> bool:
+        calls.append("status")
+        return True
+
+    assert watchdog._run_with_retries(
+        always_timeout,
+        attempts=3,
+        delay_seconds=0.1,
+        status_check=status_check,
+    ) is True
+    assert calls == ["attempt", "status"]
+
+
 def test_parse_log_timestamp() -> None:
     ts = watchdog._parse_log_timestamp("2025-12-21 12:01:02 WARNING something happened")
     assert ts is not None

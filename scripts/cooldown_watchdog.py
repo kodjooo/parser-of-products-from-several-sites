@@ -136,6 +136,7 @@ def _run_with_retries(
     action: Callable[[], None],
     attempts: int,
     delay_seconds: float,
+    status_check: Callable[[], bool] | None = None,
 ) -> bool:
     """Выполняет действие с повторами. attempts=0 означает бесконечные попытки."""
     attempt = 0
@@ -145,6 +146,9 @@ def _run_with_retries(
             action()
             return True
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            if status_check and status_check():
+                _log("Контейнеры поднялись несмотря на таймаут, считаем попытку успешной.")
+                return True
             _log(f"Ошибка перезапуска (попытка {attempt}): {exc}")
             if attempts and attempt >= attempts:
                 return False
@@ -244,6 +248,20 @@ def main() -> None:
         _LOG_FILE = Path(args.log_output)
 
     _log(f"Старт слежения за {log_path}")
+    def _service_running() -> bool:
+        result = subprocess.run(
+            [args.compose_bin, "compose", "ps", "--services", "--status", "running"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return False
+        running = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        if args.restart_mode == "stack":
+            return args.service in running and "watchdog" in running
+        return args.service in running
     for line in _follow_log(log_path, args.poll_interval):
         if not should_trigger(line):
             continue
@@ -267,7 +285,12 @@ def main() -> None:
                 command_timeout=args.command_timeout,
             )
 
-        if _run_with_retries(_attempt_restart, args.retry_attempts, args.retry_delay_seconds):
+        if _run_with_retries(
+            _attempt_restart,
+            args.retry_attempts,
+            args.retry_delay_seconds,
+            status_check=_service_running,
+        ):
             last_restart_ts = now
             _log("Контейнер перезапущен.")
 
