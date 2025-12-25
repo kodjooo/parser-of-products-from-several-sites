@@ -45,7 +45,7 @@ CLI инициализирует раннер (`app.workflow.runner.AgentRunner`
 3. На основе конфигурации поднимается слой state (SQLite файл + кэш Google `_state`).
 4. Для каждого сайта создаётся `SiteCrawler`, который:
    - выбирает движок (HTTP или Playwright) исходя из `engine`;
-   - обрабатывает все `category_urls`, поддерживая пагинацию и фильтры;
+- обрабатывает все `category_urls`, поддерживая пагинацию и фильтры, а при необходимости фиксирует лимит страниц через `category_pages`;
    - пишет результаты в буфер `SiteCrawlResult`.
 5. Буфер передаётся в `sheets.GoogleSheetsClient`, который пакетно коммитит строки и обновляет `_runs`.
 
@@ -110,6 +110,8 @@ limits:
   max_scrolls: 30
 category_urls:
   - "https://alcoplaza.ru/catalog/vodka/"
+category_pages:
+  "https://alcoplaza.ru/catalog/vodka/": 47
 ```
 Селекторы для цен являются настраиваемыми: `price_with_discount_selector` может быть строкой или списком — в последнем случае агент проверяет каждый CSS-селектор по порядку, пока не найдёт цену со скидкой (это полезно, когда у сайта несколько вариантов вёрстки).
 

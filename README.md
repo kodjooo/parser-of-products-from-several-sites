@@ -23,7 +23,7 @@
        - `PRODUCT_FETCH_ENGINE` — какой движок использовать для загрузки карточек (`http` по умолчанию или `browser`, чтобы открывать каждую карточку в Playwright с поведенческим слоем).
        - `PRODUCT_IMAGE_DIR` — каталог внутри контейнера, где будут храниться скачанные изображения товаров (смонтируйте volume).
   - `NETWORK_ACCEPT_LANGUAGE` управляет Accept-Language/locale в Playwright-контекстах, `NETWORK_BROWSER_HEADLESS` позволяет включать визуальный режим Playwright (false — открыть окно Chromium), `NETWORK_BROWSER_SLOW_MO_MS` замедляет действия браузера (slow-mo Playwright), `NETWORK_BROWSER_PREVIEW_BEFORE_BEHAVIOR_SEC` даёт паузу перед стартом действий, `NETWORK_BROWSER_EXTRA_PAGE_PREVIEW_SEC` удерживает дополнительные вкладки, а `NETWORK_BROWSER_PREVIEW_DELAY_SEC` задаёт паузу перед закрытием основной вкладки (полезно, если нужно наблюдать действия браузера). `NETWORK_PROXY_ALLOW_DIRECT` даёт возможность чередовать прокси с прямыми подключениями через текущую сеть сервера; для winestyle и других чувствительных сайтов мы оставляем эту переменную равной `false`, чтобы принудительно использовать только пул прокси и видеть смену `proxy=` в логах категорий. Блок переменных `BEHAVIOR_*` включает поведенческий слой (см. ниже).
-2. Сформируйте конфиги сайтов `config/sites/*.yml` (selectors, pagination, limits, wait/stop conditions, список `category_urls`) и примонтируйте каталог в `SITE_CONFIG_DIR`.
+2. Сформируйте конфиги сайтов `config/sites/*.yml` (selectors, pagination, limits, wait/stop conditions, список `category_urls`, опционально `category_pages` для точного лимита страниц по категориям) и примонтируйте каталог в `SITE_CONFIG_DIR`.
    - В блоке selectors можно указать `content_drop_after` — список CSS-селекторов, после которых (включая соответствующие элементы) текст товара не попадёт в `product_content`. Это полезно для удаления блоков отзывов/рекомендаций. Если нужно убрать только конкретный фрагмент, но сохранить текст ниже по странице, используйте `content_exclude_selectors` — элементы, подходящие под эти селекторы, будут вырезаны из HTML перед очисткой текста.
    - Для дополнительных полей предусмотрите селекторы: `name_en_selector`, `name_ru_selector`, `price_without_discount_selector`, `price_with_discount_selector`, а также словарь `category_labels` (ключ — slug из URL после `/items/`, значение — человекочитаемое название категории в таблице). Для `price_with_discount_selector` можно передать список селекторов — агент пойдёт по нему сверху вниз, пока не найдёт цену.
    - Для поведенческого слоя можно указать `selectors.hover_targets` — список CSS-селекторов в категориях, куда следует плавно наводить курсор (перезаписывают глобальные настройки). Для карточек товаров добавлен отдельный список `selectors.product_hover_targets`, который позволяет задать собственные элементы (или отключить hover, передав пустой список).
@@ -149,8 +149,8 @@ source .venv/bin/activate && set -a && source .env && set +a && python -m app.ma
 ## Деплой на удалённый сервер
 1. На сервере перейдите в каталог, где хотите держать агент, и клонируйте репозиторий рядом с текущим терминалом:
    ```bash
-   git clone https://github.com/kodjooo/parser-of-products-from-several-sites.git
-   cd parser-of-products-from-several-sites
+   git clone https://github.com/kodjooo/parser-of-products-from-several-sites.git parser-of-products-from-several-sites-wine
+   cd parser-of-products-from-several-sites-wine
    ```
    Если часть конфигов/секретов уже подготовлена локально, скопируйте их в свежесозданную папку (например, `scp -r config/sites assets/images secrets state user@host:~/parser-of-products-from-several-sites/`).
 2. На сервере установите Docker и из текущего каталога репозитория выполните:

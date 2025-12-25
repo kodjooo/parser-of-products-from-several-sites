@@ -251,6 +251,12 @@ class SiteConfig(BaseModel):
     wait_conditions: list[WaitCondition] = Field(default_factory=list)
     stop_conditions: list[StopCondition] = Field(default_factory=list)
     category_urls: list[HttpUrl]
+    category_pages: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Перекрытие количества страниц по конкретным категориям (ключ = URL категории)"
+        ),
+    )
 
     @field_validator("category_urls")
     @classmethod
@@ -258,6 +264,15 @@ class SiteConfig(BaseModel):
         if not value:
             msg = "Для сайта нужно указать минимум один category_url"
             raise ValueError(msg)
+        return value
+
+    @field_validator("category_pages")
+    @classmethod
+    def _validate_category_pages(cls, value: dict[str, int]) -> dict[str, int]:
+        for category_url, pages in value.items():
+            if pages < 1:
+                msg = f"category_pages для {category_url} должен быть >= 1"
+                raise ValueError(msg)
         return value
 
     @property

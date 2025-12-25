@@ -158,6 +158,43 @@ def test_site_crawler_numbered_pages(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     store.close()
 
 
+def test_site_crawler_category_pages_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    site = _site_config()
+    category_url = str(site.category_urls[0])
+    site.category_pages = {category_url: 2}
+    config = _global_config(tmp_path)
+    store = StateStore(Path(config.state.database))
+    context = RuntimeContext(
+        run_id="run-1",
+        started_at=datetime.now(timezone.utc),
+        config=config,
+        sites=[site],
+        state_store=store,
+        dry_run=True,
+        resume=False,
+        assets_dir=tmp_path / "assets",
+        flush_product_interval=10,
+    )
+    html = '<div class="product"><a href="https://demo.example/p/1">1</a></div>'
+    responses = {
+        "https://demo.example/catalog/": html,
+        "https://demo.example/catalog/?page=2": html,
+        "https://demo.example/catalog/?page=3": html,
+    }
+    fake_engine = FakeEngine(responses)
+    monkeypatch.setattr("app.crawler.site_crawler.create_engine", lambda *args, **kwargs: fake_engine)
+    monkeypatch.setattr("app.crawler.site_crawler.ProductContentFetcher", lambda *args, **kwargs: DummyContentFetcher())
+
+    crawler = SiteCrawler(context, site, flush_products=10)
+    result = crawler.crawl()
+
+    assert len(result.records) == 2
+    assert "https://demo.example/catalog/?page=3" not in fake_engine.calls
+    store.close()
+
+
 def test_site_crawler_respects_global_stop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     site = _site_config()
     config = _global_config(tmp_path)

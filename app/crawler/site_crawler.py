@@ -150,6 +150,9 @@ class SiteCrawler:
             max_pages = min(max_pages_limit, pagination.end_page)
         else:
             max_pages = max_pages_limit
+        category_pages = self.site.category_pages.get(category_url)
+        if category_pages is not None:
+            max_pages = min(max_pages, category_pages)
         metrics = CategoryMetrics(site_name=self.site.name, category_url=category_url)
         records: list[ProductRecord] = []
         page = start_page
